@@ -22,6 +22,13 @@ confirm() {
   IFS= read -r answer < /dev/tty
   case "$answer" in ''|y|Y|yes|YES) return 0;; *) return 1;; esac
 }
+ask() {
+  local answer
+  need_tty
+  printf '%s' "$1" > /dev/tty
+  IFS= read -r answer < /dev/tty
+  printf '%s' "$answer"
+}
 
 [ "$(uname -s)" = Linux ] || fail 'Run this installer on your Linux server.'
 command -v curl >/dev/null || fail 'Install curl, then run this command again.'
@@ -53,37 +60,6 @@ if ! docker info >/dev/null 2>&1; then
   "${docker_cmd[@]}" info >/dev/null || fail 'Docker is not running or is not accessible.'
 fi
 
-if ! command -v tailscale >/dev/null; then
-  say 'Tailscale connects your devices privately.'
-  confirm 'Install Tailscale from its official installer now?' || fail 'Tailscale is required.'
-  curl -fsSL https://tailscale.com/install.sh -o "$scratch/install-tailscale.sh"
-  sh "$scratch/install-tailscale.sh"
-fi
-if ! tailscale status --json > "$scratch/tailscale-status.json" 2>/dev/null ||
-  ! python3 - "$scratch/tailscale-status.json" <<'PY'
-import json, sys
-with open(sys.argv[1]) as source:
-    status = json.load(source)
-sys.exit(0 if status.get('BackendState') == 'Running' else 1)
-PY
-then
-  need_tty
-  say 'Sign in to Tailscale on this server when prompted.'
-  as_admin tailscale up
-  tailscale status --json > "$scratch/tailscale-status.json"
-fi
-server_host=$(python3 - "$scratch/tailscale-status.json" <<'PY'
-import json, re, sys
-with open(sys.argv[1]) as source:
-    status = json.load(source)
-self_node = status.get('Self') or {}
-host = (self_node.get('DNSName') or '').rstrip('.')
-if not self_node.get('Online') or not re.fullmatch(r'[a-zA-Z0-9.-]+\.ts\.net', host):
-    raise SystemExit('Connect this server to Tailscale before installing Wawa.')
-print(host)
-PY
-)
-
 install_dir=${WAWA_INSTALL_DIR:-"$HOME/.local/share/wawa-server"}
 if [ -e "$install_dir" ] && [ ! -f "$install_dir/.wawa-managed" ]; then
   fail "The installation folder already exists and is not managed by this installer: $install_dir"
@@ -97,6 +73,81 @@ fi
 if [ ! -f "$install_dir/.wawa-managed" ] && { [ -n "$existing_projects" ] || [ -n "$("${docker_cmd[@]}" volume ls -q --filter label=com.docker.compose.project=wawa-server)" ]; }; then
   fail 'Existing Wawa server data was found. It was left untouched; restore or move it explicitly.'
 fi
+env_file="$install_dir/.env"
+saved() { [ -f "$env_file" ] && sed -n "s/^$1=//p" "$env_file" | head -n 1; }
+
+# How other computers reach the server. Installations from before this choice used Tailscale.
+fresh_install=false
+[ -f "$env_file" ] || fresh_install=true
+if [ "$fresh_install" = false ]; then
+  route=$(saved WAWA_ROUTE || true)
+  route=${route:-tailscale}
+else
+  route=${WAWA_ROUTE:-}
+  if [ -z "$route" ]; then
+    say 'How should your other computers reach this server?'
+    say '  1) Privately through Tailscale. Recommended for a computer at home.'
+    say '  2) Publicly through a domain you own. Recommended for a rented server.'
+    say '  3) Through Cloudflare Tunnel, with a domain on Cloudflare. For a computer at home'
+    say '     that cannot forward ports.'
+    case "$(ask 'Choice [1]: ')" in
+      ''|1) route=tailscale;;
+      2) route=domain;;
+      3) route=cloudflare;;
+      *) fail 'Choose 1, 2 or 3, then run this command again.';;
+    esac
+  fi
+fi
+case "$route" in tailscale|domain|cloudflare) ;; *) fail 'WAWA_ROUTE must be tailscale, domain or cloudflare.';; esac
+
+server_host='' domain=''
+if [ "$route" = tailscale ]; then
+  if ! command -v tailscale >/dev/null; then
+    say 'Tailscale connects your devices privately.'
+    confirm 'Install Tailscale from its official installer now?' || fail 'Tailscale is required for a private server.'
+    curl -fsSL https://tailscale.com/install.sh -o "$scratch/install-tailscale.sh"
+    sh "$scratch/install-tailscale.sh"
+  fi
+  if ! tailscale status --json > "$scratch/tailscale-status.json" 2>/dev/null ||
+    ! python3 - "$scratch/tailscale-status.json" <<'PY'
+import json, sys
+with open(sys.argv[1]) as source:
+    status = json.load(source)
+sys.exit(0 if status.get('BackendState') == 'Running' else 1)
+PY
+  then
+    need_tty
+    say 'Sign in to Tailscale on this server when prompted. You can scan the code with your phone.'
+    as_admin tailscale up --qr
+    tailscale status --json > "$scratch/tailscale-status.json"
+  fi
+  server_host=$(python3 - "$scratch/tailscale-status.json" <<'PY'
+import json, re, sys
+with open(sys.argv[1]) as source:
+    status = json.load(source)
+self_node = status.get('Self') or {}
+host = (self_node.get('DNSName') or '').rstrip('.')
+if not self_node.get('Online') or not re.fullmatch(r'[a-zA-Z0-9.-]+\.ts\.net', host):
+    raise SystemExit('Connect this server to Tailscale before installing Wawa.')
+print(host)
+PY
+  )
+fi
+
+valid_domain() {
+  [[ "$1" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$ ]]
+}
+check_domain_points_here() {
+  local public_ip resolved
+  public_ip=$(curl -4 -fsS --max-time 10 https://checkip.amazonaws.com | tr -d '[:space:]') ||
+    fail "Could not find this server's public address. Check its internet connection."
+  resolved=$(getent ahostsv4 "$1" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true)
+  case " $resolved " in
+    *" $public_ip "*) ;;
+    *) fail "Point an A record for $1 to $public_ip at your DNS provider, wait until it takes effect, then run this command again. It now resolves to: ${resolved:-nothing}";;
+  esac
+}
+
 if [ ! -d "$install_dir" ]; then
   mkdir -p "$install_dir"
   chmod 700 "$install_dir"
@@ -110,15 +161,28 @@ say 'Fetching the Wawa server definition…'
 curl -fsSL "https://raw.githubusercontent.com/$repo/$ref/deploy/server/compose.yml" -o "$scratch/compose.yml"
 grep -q '^services:' "$scratch/compose.yml" || fail 'That Wawa version does not include the server installer.'
 grep -q 'ghcr.io/' "$scratch/compose.yml" || fail 'That Wawa version does not publish a server image. Use a newer version.'
+if [ "$route" != tailscale ]; then
+  grep -q "profiles: \[$route\]" "$scratch/compose.yml" || fail 'That Wawa version does not support this connection route. Use a newer version.'
+fi
 mkdir -p "$expected_project_dir"
 install -m 600 "$scratch/compose.yml" "$expected_project_dir/compose.yml"
 find "$install_dir/app" -mindepth 1 -maxdepth 1 ! -name deploy -exec rm -rf {} +
 
-env_file="$install_dir/.env"
-if [ ! -f "$env_file" ]; then
-  need_tty
-  tailscale serve status --json > "$scratch/serve.json"
-  https_port=$(python3 - "$scratch/serve.json" <<'PY'
+if [ "$fresh_install" = true ]; then
+  local_port=$(python3 - <<'PY'
+import socket
+with socket.socket() as sock:
+    sock.bind(('127.0.0.1', 0))
+    print(sock.getsockname()[1])
+PY
+  )
+  engine=${WAWA_ENGINE:-whatsapp-web.js}
+  case "$engine" in whatsapp-web.js|baileys) ;; *) fail 'WAWA_ENGINE must be whatsapp-web.js or baileys.';; esac
+  domain='' tunnel_token='' proxies=''
+  case "$route" in
+    tailscale)
+      tailscale serve status --json > "$scratch/serve.json"
+      https_port=$(python3 - "$scratch/serve.json" <<'PY'
 import json, sys
 with open(sys.argv[1]) as source:
     used = (json.load(source).get('TCP') or {})
@@ -129,44 +193,61 @@ for port in range(8443, 8543):
 else:
     raise SystemExit('No free Tailscale HTTPS port was found.')
 PY
-  )
-  local_port=$(python3 - <<'PY'
-import socket
-with socket.socket() as sock:
-    sock.bind(('127.0.0.1', 0))
-    print(sock.getsockname()[1])
-PY
-  )
-  say 'Choose a WhatsApp connection: 1) Standard  2) Lightweight, experimental'
-  printf 'Choice [1]: ' > /dev/tty
-  IFS= read -r choice < /dev/tty
-  case "$choice" in ''|1) engine=whatsapp-web.js;; 2) engine=baileys;; *) fail 'Choose 1 or 2, then run this command again.';; esac
-  say 'Choose a workspace password of at least 16 letters, numbers, hyphens or underscores.'
-  while :; do
-    printf 'Password: ' > /dev/tty
-    IFS= read -r -s password < /dev/tty
-    printf '\nConfirm password: ' > /dev/tty
-    IFS= read -r -s confirmation < /dev/tty
-    printf '\n' > /dev/tty
-    if [ "$password" = "$confirmation" ] && [[ "$password" =~ ^[a-zA-Z0-9_-]{16,128}$ ]]; then break; fi
-    say 'Passwords must match and use at least 16 allowed characters. Try again.'
-  done
+      )
+      origin="https://$server_host:$https_port"
+      ;;
+    domain|cloudflare)
+      domain=${WAWA_DOMAIN:-}
+      [ -n "$domain" ] || domain=$(ask 'Domain for this server, such as tasks.example.com: ')
+      domain=$(printf '%s' "$domain" | tr '[:upper:]' '[:lower:]')
+      valid_domain "$domain" || fail 'Enter a domain such as tasks.example.com, without https:// or a path.'
+      origin="https://$domain"
+      # Every request reaches Wawa through the proxy container, so lockouts must count the
+      # forwarded client. Only containers on Docker's private networks may set that header.
+      proxies='172.16.0.0/12,192.168.0.0/16'
+      if [ "$route" = domain ]; then
+        check_domain_points_here "$domain"
+      else
+        say "In Cloudflare Zero Trust, create a tunnel, add the public hostname $domain with the"
+        say 'service http://wawa:2786, and copy the tunnel token.'
+        tunnel_token=${WAWA_TUNNEL_TOKEN:-}
+        if [ -z "$tunnel_token" ]; then
+          need_tty
+          printf 'Tunnel token: ' > /dev/tty
+          IFS= read -r -s tunnel_token < /dev/tty
+          printf '\n' > /dev/tty
+        fi
+        [[ "$tunnel_token" =~ ^[A-Za-z0-9+/=_-]+$ ]] && [ "${#tunnel_token}" -ge 40 ] && [ "${#tunnel_token}" -le 4096 ] || fail 'That does not look like a Cloudflare tunnel token. Copy it again from the tunnel page.'
+      fi
+      ;;
+  esac
+  # Browsers still sign in with a password; computers pair with a code instead.
+  password=$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')
   umask 077
+  # Shown once at the end of the first run that gets that far, even if this run fails later.
+  : > "$install_dir/.password-pending"
   env_tmp=$(mktemp "$install_dir/.env.XXXXXXXX")
-  printf 'WAWA_ORIGIN=https://%s:%s\nWAWA_PORT=%s\nWAWA_ENGINE=%s\nAPP_PASSWORD=%s\n' \
-    "$server_host" "$https_port" "$local_port" "$engine" "$password" > "$env_tmp"
-  unset password confirmation
+  {
+    printf 'WAWA_ROUTE=%s\nWAWA_ORIGIN=%s\nWAWA_PORT=%s\nWAWA_ENGINE=%s\nAPP_PASSWORD=%s\n' \
+      "$route" "$origin" "$local_port" "$engine" "$password"
+    [ -z "$domain" ] || printf 'WAWA_DOMAIN=%s\n' "$domain"
+    [ -z "$proxies" ] || printf 'TRUSTED_PROXIES=%s\n' "$proxies"
+    [ -z "$tunnel_token" ] || printf 'CLOUDFLARE_TUNNEL_TOKEN=%s\n' "$tunnel_token"
+  } > "$env_tmp"
+  unset tunnel_token password
   mv "$env_tmp" "$env_file"
   env_tmp=''
 fi
 
-origin=$(sed -n 's/^WAWA_ORIGIN=//p' "$env_file")
-local_port=$(sed -n 's/^WAWA_PORT=//p' "$env_file")
-https_port=${origin##*:}
-case "$origin" in "https://$server_host:"*) ;; *) fail 'The saved Wawa address does not match this server. Existing settings were left untouched.';; esac
-case "$local_port:$https_port" in *[!0-9:]*|:*) fail 'The saved Wawa ports are invalid.';; esac
-tailscale serve status --json > "$scratch/serve.json"
-python3 - "$scratch/serve.json" "$server_host" "$https_port" "$local_port" <<'PY'
+origin=$(saved WAWA_ORIGIN)
+local_port=$(saved WAWA_PORT)
+case "$local_port" in ''|*[!0-9]*) fail 'The saved Wawa port is invalid.';; esac
+if [ "$route" = tailscale ]; then
+  https_port=${origin##*:}
+  case "$origin" in "https://$server_host:"*) ;; *) fail 'The saved Wawa address does not match this server. Existing settings were left untouched.';; esac
+  case "$https_port" in ''|*[!0-9]*) fail 'The saved Wawa ports are invalid.';; esac
+  tailscale serve status --json > "$scratch/serve.json"
+  python3 - "$scratch/serve.json" "$server_host" "$https_port" "$local_port" <<'PY'
 import json, sys
 with open(sys.argv[1]) as source:
     config = json.load(source)
@@ -176,24 +257,41 @@ target = (((config.get('Web') or {}).get(f'{host}:{port}') or {}).get('Handlers'
 if used and target != f'http://127.0.0.1:{local}':
     raise SystemExit('The saved Tailscale port is used by another service; nothing was changed.')
 PY
+else
+  domain=$(saved WAWA_DOMAIN)
+  if [ "$origin" != "https://$domain" ] || ! valid_domain "$domain"; then
+    fail 'The saved Wawa domain is invalid. Existing settings were left untouched.'
+  fi
+fi
 
-# A small updater lives next to the settings so a timer, or a person, can
-# refresh the image without re-running the interactive parts above.
+# A small helper lives next to the settings so a timer, or a person, can refresh the
+# image, create pairing codes, or show the password without the interactive parts above.
 cat > "$install_dir/update.sh" <<EOF
 #!/usr/bin/env bash
-# Updates this Wawa server to the newest published image. Safe to re-run.
+# Wawa server helper. Safe to re-run.
+#   update.sh                            update to the newest published image
+#   update.sh pair [--days 30|90|365]    print a code for pairing a computer
+#   update.sh password                   show the password for signing in from a browser
 set -euo pipefail
 install_dir=$(printf '%q' "$install_dir")
 repo=$(printf '%q' "$repo")
 ref=$(printf '%q' "$ref")
 docker_cmd=($(printf '%q ' "${docker_cmd[@]}"))
 compose_file="\$install_dir/app/deploy/server/compose.yml"
+route=\$(sed -n 's/^WAWA_ROUTE=//p' "\$install_dir/.env" | head -n 1)
+compose=("\${docker_cmd[@]}" compose --project-name wawa-server --env-file "\$install_dir/.env" -f "\$compose_file")
+case "\${route:-tailscale}" in domain|cloudflare) compose+=(--profile "\$route");; esac
+case "\${1:-}" in
+  pair) shift; exec "\${compose[@]}" exec -T wawa node dist/server/pair-cli.js "\$@";;
+  password) sed -n 's/^APP_PASSWORD=//p' "\$install_dir/.env"; exit 0;;
+  '') ;;
+  *) echo 'Usage: update.sh [pair [--days 30|90|365] | password]' >&2; exit 2;;
+esac
 tmp=\$(mktemp "\$install_dir/.compose.XXXXXXXX")
 trap 'rm -f "\$tmp"' EXIT
 if curl -fsSL "https://raw.githubusercontent.com/\$repo/\$ref/deploy/server/compose.yml" -o "\$tmp" && grep -q '^services:' "\$tmp"; then
   install -m 600 "\$tmp" "\$compose_file"
 fi
-compose=("\${docker_cmd[@]}" compose --project-name wawa-server --env-file "\$install_dir/.env" -f "\$compose_file")
 before=\$("\${compose[@]}" images -q wawa 2>/dev/null || true)
 "\${compose[@]}" pull -q wawa openwa
 "\${compose[@]}" up -d --no-build --remove-orphans
@@ -208,10 +306,11 @@ EOF
 chmod 700 "$install_dir/update.sh"
 
 compose=("${docker_cmd[@]}" compose --project-name wawa-server --env-file "$env_file" -f "$expected_project_dir/compose.yml")
+[ "$route" = tailscale ] || compose+=(--profile "$route")
 say 'Downloading the latest Wawa and starting it with its WhatsApp connection…'
 "${compose[@]}" pull -q wawa openwa
 "${compose[@]}" up -d --no-build --remove-orphans
-if ! tailscale serve --bg --https="$https_port" "http://127.0.0.1:$local_port"; then
+if [ "$route" = tailscale ] && ! tailscale serve --bg --https="$https_port" "http://127.0.0.1:$local_port"; then
   say 'Administrator access is needed to finish the private connection.'
   as_admin tailscale serve --bg --https="$https_port" "http://127.0.0.1:$local_port"
 fi
@@ -256,7 +355,7 @@ fi
 say 'Checking that your workspace is ready…'
 ready=false
 for _ in $(seq 1 60); do
-  if curl -fsS --max-time 2 -H "Host: $server_host:$https_port" \
+  if curl -fsS --max-time 2 -H "Host: ${origin#https://}" \
     "http://127.0.0.1:$local_port/api/health" >/dev/null 2>&1; then
     ready=true
     break
@@ -264,7 +363,39 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 [ "$ready" = true ] || fail 'The workspace did not become ready. Run this command again to retry; your data has not been removed.'
-say "Wawa is ready at $origin"
-say 'On your Mac, choose Use another computer in Wawa, enter that address and the password you chose.'
+if [ "$route" != tailscale ]; then
+  say "Checking that $origin reaches this server…"
+  reachable=false
+  for _ in $(seq 1 45); do
+    if curl -fsS --max-time 5 "$origin/api/pair/info" >/dev/null 2>&1; then
+      reachable=true
+      break
+    fi
+    sleep 2
+  done
+  if [ "$reachable" != true ]; then
+    if [ "$route" = domain ]; then
+      fail "Wawa is running, but $origin did not answer. Open ports 80 and 443 to this server in its firewall and at your hosting provider, then run this command again."
+    fi
+    fail "Wawa is running, but $origin did not answer. In Cloudflare, check that the tunnel is healthy and that $domain points to http://wawa:2786, then run this command again."
+  fi
+fi
+
+pairing=$("${compose[@]}" exec -T wawa node dist/server/pair-cli.js) ||
+  fail "Wawa is running, but no pairing code could be created. Run $install_dir/update.sh pair to try again."
+server_name=$domain
+[ "$route" != tailscale ] || server_name=${server_host%%.*}
+say ''
+say 'Wawa is ready.'
+say "$pairing"
+if [ -f "$install_dir/.password-pending" ]; then
+  say ''
+  say "Password for signing in from a browser: $(saved APP_PASSWORD)"
+  say "It is shown only now. Run $install_dir/update.sh password to see it again."
+  rm -f "$install_dir/.password-pending"
+fi
+say ''
+say "On your Mac, open Wawa, choose Use another computer, pick $server_name, and enter the code."
+say "For another computer later, run $install_dir/update.sh pair"
 say 'Then link WhatsApp, select your conversations, and sign in to Codex.'
 say "Your server files are in $install_dir. Keep the volumes and this folder backed up."
