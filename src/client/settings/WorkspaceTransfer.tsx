@@ -1,8 +1,8 @@
 import type { Notify } from '../../shared/useNotice.js';
 import { useState } from 'react';
-import { ShieldCheck } from 'lucide-react';
 import { appFetch } from '../api.js';
 import { errorMessage } from '../../shared/errors.js';
+import { SettingsGroup, SettingsRow } from './primitives.js';
 
 export function WorkspaceTransfer({ notify, onImport }: { notify: Notify; onImport?: () => void }) {
   const [passphrase, setPassphrase] = useState('');
@@ -34,21 +34,15 @@ export function WorkspaceTransfer({ notify, onImport }: { notify: Notify; onImpo
     }
   }
   return (
-    <section className="settings-card">
-      <div className="card-title">
-        <span className="card-icon green">
-          <ShieldCheck size={20} />
-        </span>
-        <div>
-          <h2>Move your workspace</h2>
-          <p>
-            Save tasks, notes, conversations, cached images and saved model keys in an encrypted
-            file. This does not move your WhatsApp server or its linked session.
-          </p>
-        </div>
-      </div>
-      <div className="field">
-        <label htmlFor="transfer-passphrase">Create a passphrase</label>
+    <SettingsGroup
+      title="Move your workspace"
+      description="Save tasks, notes, conversations, cached images and saved model keys in an encrypted file. This does not move your WhatsApp server or its linked session."
+    >
+      <SettingsRow
+        title="Create a passphrase"
+        htmlFor="transfer-passphrase"
+        description="At least eight characters. You will need it on your new computer."
+      >
         <input
           id="transfer-passphrase"
           type="password"
@@ -56,12 +50,18 @@ export function WorkspaceTransfer({ notify, onImport }: { notify: Notify; onImpo
           value={passphrase}
           onChange={(event) => setPassphrase(event.target.value)}
         />
-        <small>
-          Use at least eight characters. You will need this passphrase on your new computer.
-        </small>
-      </div>
-      <div className="field">
-        <label htmlFor="transfer-passphrase-confirm">Repeat the passphrase</label>
+      </SettingsRow>
+      <SettingsRow
+        title="Repeat the passphrase"
+        htmlFor="transfer-passphrase-confirm"
+        description={
+          mismatch ? (
+            <span id="transfer-passphrase-mismatch" role="alert" className="field-error">
+              The passphrases do not match.
+            </span>
+          ) : undefined
+        }
+      >
         <input
           id="transfer-passphrase-confirm"
           type="password"
@@ -71,14 +71,8 @@ export function WorkspaceTransfer({ notify, onImport }: { notify: Notify; onImpo
           aria-describedby={mismatch ? 'transfer-passphrase-mismatch' : undefined}
           onChange={(event) => setConfirmation(event.target.value)}
         />
-        {mismatch && (
-          <small id="transfer-passphrase-mismatch" role="alert" className="field-error">
-            The passphrases do not match.
-          </small>
-        )}
-      </div>
-      <div className="card-footer">
-        <span>Your transfer file is encrypted.</span>
+      </SettingsRow>
+      <SettingsRow title="Download" description="Your transfer file is encrypted.">
         <button
           className="button secondary"
           disabled={busy || passphrase.length < 8 || confirmation !== passphrase}
@@ -86,18 +80,17 @@ export function WorkspaceTransfer({ notify, onImport }: { notify: Notify; onImpo
         >
           {busy ? 'Preparing…' : 'Download transfer'}
         </button>
-      </div>
+      </SettingsRow>
       {onImport && (
-        <div className="workspace-import-option">
-          <div>
-            <strong>Bring an existing workspace to this computer</strong>
-            <p>Choose an encrypted transfer from your other workspace.</p>
-          </div>
+        <SettingsRow
+          title="Bring an existing workspace to this computer"
+          description="Choose an encrypted transfer from your other workspace."
+        >
           <button className="button secondary" onClick={onImport}>
             Import workspace
           </button>
-        </div>
+        </SettingsRow>
       )}
-    </section>
+    </SettingsGroup>
   );
 }
