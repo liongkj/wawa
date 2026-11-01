@@ -1,0 +1,88 @@
+name: Server image
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/wawa
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=server-${{ matrix.arch }}
+          cache-to: type=gha,scope=server-${{ matrix.arch }},mode=max
+      - name: Save the digest
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          printf '%s' '${{ steps.build.outputs.digest }}' | sed 's/^sha256://' > "$RUNNER_TEMP/digests/${{ matrix.arch }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+  publish:
+    name: Publish manifest
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digest-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compute tags
+        id: tags
+        run: |
+          tags="$IMAGE:main-${GITHUB_SHA::7}"
+          case "$GITHUB_REF" in
+            refs/heads/main) tags="$tags $IMAGE:latest" ;;
+            refs/tags/v*) tags="$tags $IMAGE:${GITHUB_REF#refs/tags/} $IMAGE:latest" ;;
+          esac
+          printf 'tags=%s\n' "$tags" >> "$GITHUB_OUTPUT"
+      - name: Create the multi-arch manifest
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          args=''
+          for tag in ${{ steps.tags.outputs.tags }}; do args="$args -t $tag"; done
+          docker buildx imagetools create $args $(for digest in *; do printf '%s@sha256:%s ' "$IMAGE" "$(cat "$digest")"; done)
+      - name: Inspect
+        run: docker buildx imagetools inspect "$IMAGE:main-${GITHUB_SHA::7}"

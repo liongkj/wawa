@@ -53,6 +53,7 @@ services:
         condition: service_healthy
 
   wawa:
+    image: ${WAWA_IMAGE:-ghcr.io/liongkj/wawa:latest}
     build:
       context: ../..
     init: true
