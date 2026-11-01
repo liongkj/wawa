@@ -10,8 +10,8 @@ The companion already has a better model: the workspace shows a one-time code, t
 
 ## Usage
 
-1. The installer finishes with two lines: the server name and an eight-digit code valid for ten minutes.
-2. In the Mac app, choose **Use another computer**, type the server name as shown, and the code. The app finds the server, exchanges the code for a device token, and opens the workspace. No password is typed.
+1. The installer asks one question, private through Tailscale or public through a domain, then installs what it needs and finishes with the server name and an eight-digit code valid for ten minutes. It no longer asks for a password or a WhatsApp engine; Standard is the default and the engine can be changed in Settings.
+2. In the Mac app, choose **Use another computer**. On a tailnet the app lists the Wawa servers it finds, so only the code is typed. Otherwise type the domain and the code. The app exchanges the code for a device token and opens the workspace. No password is typed.
 3. A second Mac pairs the same way. Anyone already connected creates a new code from **Settings → Workspaces → Pair another computer**. On the server, `update.sh pair` prints one.
 4. **Settings → Workspaces → Paired computers** lists each computer with its last use and a **Disconnect** button. A disconnected computer returns to the picker on its next request.
 
@@ -27,7 +27,17 @@ bb pairs with a code alone because every daemon dials out to a hosted relay that
 
 The picker accepts a bare MagicDNS name, a full host name, or a complete `https://` URL. For a name without a port, the app probes `https://NAME:PORT/api/pair/info` for ports 8443 to 8462 in parallel with a two-second timeout. The installer always takes the first free port from 8443 upward, so the first probe succeeds in practice; the range exists for servers sharing a node with other services. The info endpoint is unauthenticated and returns only `{ "pairing": true, "name": "Wawa" }`, enough to tell a Wawa server from another HTTPS service and nothing else.
 
-When the Tailscale app is installed on the Mac, the picker also offers the online peers from `tailscale status --json` as suggestions. This is a convenience, not a requirement, and the code path without Tailscale on the Mac must keep working.
+When the Tailscale app is installed on the Mac, the picker probes every online peer from `tailscale status --json` at the same ports. Most tailnets hold one Wawa server, so the picker shows it by name and asks for the code alone. Typing a name remains possible for public routes and tailnets without the Tailscale app on the Mac.
+
+### Access routes
+
+Tailscale is recommended, not required. The installer asks one question first: reach this server privately through Tailscale, or publicly through a domain you own. The recommendation depends on where the server is. A computer at home sits behind a router, so a public route needs a port forward and a domain that follows a changing address; Tailscale is simpler there. A rented server has a public address already, so a domain and an A record are simpler than installing Tailscale on every Mac.
+
+The public route adds a Caddy container that obtains a Let’s Encrypt certificate and proxies to Wawa. Before starting it, the installer checks that the domain resolves to this machine and that port 443 answers from outside, and prints the exact fix when either fails. The server name in the picker is then the domain, and the Mac needs no Tailscale. Pairing is unchanged, but the lockouts matter more because the endpoint is reachable from anywhere, and the identity-header shortcut below is unavailable, so the code is the only path. Cloudflare Tunnel suits a home computer without port forwarding, but it needs an account and a token, so it stays in the docs rather than the installer.
+
+### Code only, and no code
+
+Tailscale Serve adds the caller’s tailnet identity to each proxied request as headers. The installer records the Tailscale login that installed the server. A request on the private route from that same login may connect without a code: the server binds a device token to the identity and the picker shows a single Connect button. This needs one check before it ships: that the serve proxy replaces, rather than passes through, identity headers supplied by the client. If that holds, codes become the fallback for shared tailnets, browsers and public routes. If it does not, the code path alone stays.
 
 ### Codes and devices
 
@@ -76,7 +86,7 @@ Do not move the remote window to an injected bearer header. The window is the se
 ## Release work
 
 1. Server: `kind` column and migration, desktop codes, lockouts, `/api/pair/*`, device-bound session cookie, `pair-cli`, Settings UI. Ships alone; nothing changes for existing clients.
-2. Desktop: picker with name, code, probe, and Tailscale suggestions; token storage; initialisation script; disconnected handling. Needs a desktop build, published through the existing preview workflow.
-3. Installer: random password instead of a prompt, final pairing code, `update.sh pair`. Docs in README, `docs/desktop.md`, and `docs/docker-stack.md`.
+2. Desktop: picker with peer discovery, name, code, and probe; identity-based connect if the header check passes; token storage; initialisation script; disconnected handling. Needs a desktop build, published through the existing preview workflow.
+3. Installer: the route question with the Caddy public path, random password instead of a prompt, Standard engine by default, final pairing code, `update.sh pair`. Docs in README, `docs/desktop.md`, and `docs/docker-stack.md`.
 
 Open questions for the owner: whether the generated password should be printed at install time or only on request, and whether one year is the right token lifetime for a personal server.
