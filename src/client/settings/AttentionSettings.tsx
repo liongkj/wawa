@@ -1,10 +1,10 @@
 import type { Notify } from '../../shared/useNotice.js';
 import { useEffect, useState } from 'react';
-import { Sparkles } from 'lucide-react';
 import { AttentionPreferencesSchema, type AttentionPreferences } from '../../shared/schema.js';
 import { api } from '../api.js';
 import { errorMessage } from '../../shared/errors.js';
 import { AttentionPreferencesEditor } from '../AttentionPreferences.js';
+import { SettingsGroup, SettingsRow } from './primitives.js';
 
 export function AttentionSettings({ notify }: { notify: Notify }) {
   const [value, setValue] = useState<AttentionPreferences | null>(null);
@@ -27,23 +27,16 @@ export function AttentionSettings({ notify }: { notify: Notify }) {
     }
   }
   return (
-    <section className="settings-card">
-      <div className="card-title">
-        <span className="card-icon">
-          <Sparkles size={20} />
-        </span>
-        <div>
-          <h2>What needs attention</h2>
-          <p>Choose how new conversation evidence is organized.</p>
-        </div>
-      </div>
+    <SettingsGroup
+      title="What needs attention"
+      description="Choose how new conversation evidence is organized."
+    >
       {value && <AttentionPreferencesEditor value={value} onChange={setValue} />}
-      <div className="card-footer">
-        <span>Existing items and your corrections stay in place.</span>
+      <SettingsRow title="Existing items and your corrections stay in place.">
         <button className="button secondary" disabled={!value || busy} onClick={() => void save()}>
           {busy ? 'Saving…' : 'Save preferences'}
         </button>
-      </div>
-    </section>
+      </SettingsRow>
+    </SettingsGroup>
   );
 }

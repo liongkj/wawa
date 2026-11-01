@@ -1,10 +1,10 @@
 import type { Notify } from '../../shared/useNotice.js';
 import { useEffect, useState } from 'react';
-import { Server } from 'lucide-react';
 import { z } from 'zod';
 import { api } from '../api.js';
 import { errorMessage } from '../../shared/errors.js';
 import { DesktopSharingStatusSchema } from '../../shared/desktop-sharing.js';
+import { Pill, SettingsGroup, SettingsRow } from './primitives.js';
 
 export function DesktopSharingSettings({ notify }: { notify: Notify }) {
   const [status, setStatus] = useState<z.infer<typeof DesktopSharingStatusSchema> | null>(null);
@@ -45,24 +45,50 @@ export function DesktopSharingSettings({ notify }: { notify: Notify }) {
     }
   }
   const configured = status?.configured;
+  const enabled = configured?.kind === 'enabled';
   const httpsPort = configured?.kind === 'enabled' ? new URL(configured.origin).port || '443' : '';
   return (
-    <section className="settings-card">
-      <div className="card-title">
-        <span className="card-icon green">
-          <Server size={20} />
-        </span>
-        <div>
-          <h2>Connect other computers</h2>
-          <p>
-            Share this workspace through a private HTTPS address. This computer must stay awake.
-          </p>
-        </div>
-      </div>
+    <SettingsGroup
+      title="Connect other computers"
+      description="Share this workspace through a private HTTPS address. This computer must stay awake."
+    >
       {status && (
         <>
-          <div className="field">
-            <label htmlFor="sharing-origin">Private HTTPS address</label>
+          <SettingsRow
+            title={
+              <>
+                Sharing <Pill tone={enabled ? 'accent' : 'neutral'}>{enabled ? 'On' : 'Off'}</Pill>
+              </>
+            }
+            description={
+              status.restartRequired ? (
+                <span role="status">
+                  {status.unavailableReason === 'port_in_use'
+                    ? 'Sharing is off because the local port is in use. Choose another port, then quit and reopen Wawa.'
+                    : 'Quit Wawa from its menu or tray, then reopen it to apply this change.'}
+                </span>
+              ) : enabled ? (
+                'Other computers can open this workspace at the address below.'
+              ) : (
+                'Fill in the details below, then enable sharing.'
+              )
+            }
+          >
+            {enabled && (
+              <button
+                className="button secondary"
+                disabled={busy}
+                onClick={() => void save('disabled')}
+              >
+                Stop sharing
+              </button>
+            )}
+          </SettingsRow>
+          <SettingsRow
+            title="Private HTTPS address"
+            htmlFor="sharing-origin"
+            description="From Tailscale Serve or your private HTTPS proxy."
+          >
             <input
               id="sharing-origin"
               type="url"
@@ -71,10 +97,8 @@ export function DesktopSharingSettings({ notify }: { notify: Notify }) {
               value={origin}
               onChange={(event) => setOrigin(event.target.value)}
             />
-            <small>Use the address provided by Tailscale Serve or your private HTTPS proxy.</small>
-          </div>
-          <div className="field">
-            <label htmlFor="sharing-port">Local server port</label>
+          </SettingsRow>
+          <SettingsRow title="Local server port" htmlFor="sharing-port">
             <input
               id="sharing-port"
               type="number"
@@ -83,9 +107,12 @@ export function DesktopSharingSettings({ notify }: { notify: Notify }) {
               value={port}
               onChange={(event) => setPort(Number(event.target.value))}
             />
-          </div>
-          <div className="field">
-            <label htmlFor="sharing-password">Workspace password</label>
+          </SettingsRow>
+          <SettingsRow
+            title="Workspace password"
+            htmlFor="sharing-password"
+            description="At least 12 characters. Enter it again when changing sharing."
+          >
             <input
               id="sharing-password"
               type="password"
@@ -93,42 +120,23 @@ export function DesktopSharingSettings({ notify }: { notify: Notify }) {
               value={password}
               onChange={(event) => setPassword(event.target.value)}
             />
-            <small>
-              Use at least 12 characters. Enter the password again when changing sharing.
-            </small>
-          </div>
+          </SettingsRow>
           {configured?.kind === 'enabled' && (
-            <div className="field">
-              <label>Private network setup</label>
-              <small>
-                Check <code>tailscale serve status</code> first and use a free HTTPS port. Then run
-                this on the server computer:
-              </small>
+            <SettingsRow
+              title="Private network setup"
+              stacked
+              description={
+                <>
+                  Check <code>tailscale serve status</code> first and use a free HTTPS port. Then
+                  run this on the server computer. Install Tailscale on each computer and connect
+                  them to the same tailnet.
+                </>
+              }
+            >
               <code>{`tailscale serve --bg --https=${httpsPort} http://127.0.0.1:${configured.port}`}</code>
-              <small>
-                Install Tailscale on each computer and connect them to the same tailnet.
-              </small>
-            </div>
+            </SettingsRow>
           )}
-          {status.restartRequired && (
-            <p role="status">
-              {status.unavailableReason === 'port_in_use'
-                ? 'Sharing is off because the local port is in use. Choose another port, then quit and reopen Wawa.'
-                : 'Quit Wawa from its menu or tray, then reopen it to apply this change.'}
-            </p>
-          )}
-          <div className="card-footer">
-            {configured?.kind === 'enabled' ? (
-              <button
-                className="button secondary"
-                disabled={busy}
-                onClick={() => void save('disabled')}
-              >
-                Stop sharing
-              </button>
-            ) : (
-              <span />
-            )}
+          <SettingsRow title={enabled ? 'Apply changes' : 'Turn on sharing'}>
             <button
               className="button primary"
               disabled={
@@ -136,15 +144,11 @@ export function DesktopSharingSettings({ notify }: { notify: Notify }) {
               }
               onClick={() => void save('enabled')}
             >
-              {busy
-                ? 'Saving…'
-                : configured?.kind === 'enabled'
-                  ? 'Update sharing'
-                  : 'Enable sharing'}
+              {busy ? 'Saving…' : enabled ? 'Update sharing' : 'Enable sharing'}
             </button>
-          </div>
+          </SettingsRow>
         </>
       )}
-    </section>
+    </SettingsGroup>
   );
 }

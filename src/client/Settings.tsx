@@ -12,9 +12,7 @@ import {
   Radio,
   RefreshCw,
   Save,
-  Server,
   ShieldCheck,
-  Volume2,
   X,
 } from 'lucide-react';
 import { z } from 'zod';
@@ -950,43 +948,30 @@ export function SettingsPanel({
       </div>
       <div hidden={section !== 'attention'}>
         <AttentionSettings notify={notify} />
-        <section className="settings-card">
-          <div className="card-title">
-            <span className="card-icon">
-              <Volume2 size={20} />
-            </span>
-            <div>
-              <h2>Sounds</h2>
-              <p>Choose sounds for this workspace and its paired browser companion.</p>
-            </div>
-          </div>
+        <SettingsGroup
+          title="Sounds"
+          description="Choose sounds for this workspace and its paired browser companion."
+        >
           <SoundPreferencesEditor value={sound} onSave={onSoundSave} />
-        </section>
+        </SettingsGroup>
       </div>
       <div hidden={section !== 'workspace'}>
         {window.chat2tasksTauri && (
-          <section className="settings-card">
-            <div className="card-title">
-              <span className="card-icon green">
-                <Server size={20} />
-              </span>
-              <div>
-                <h2>Where work happens</h2>
-                <p>
-                  This workspace runs on this computer. Connect to an always-on server to keep
-                  processing while it sleeps.
-                </p>
-              </div>
-            </div>
-            <button
-              className="button secondary"
-              onClick={() =>
-                void openWorkspacePicker().catch((error) => notify(errorMessage(error), 'error'))
-              }
+          <SettingsGroup title="Where work happens">
+            <SettingsRow
+              title="This computer"
+              description="This workspace runs here. Connect to an always-on server to keep processing while it sleeps."
             >
-              Switch workspace
-            </button>
-          </section>
+              <button
+                className="button secondary"
+                onClick={() =>
+                  void openWorkspacePicker().catch((error) => notify(errorMessage(error), 'error'))
+                }
+              >
+                Switch workspace
+              </button>
+            </SettingsRow>
+          </SettingsGroup>
         )}
         {window.chat2tasksTauri && !window.chat2tasksTauri.demo && (
           <DesktopSharingSettings notify={notify} />
