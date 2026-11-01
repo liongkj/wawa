@@ -7,12 +7,16 @@ The always-on server holds the active workspace and runs its configured model co
 On the Linux server, run:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/liongkj/chat2tasks/main/scripts/install-server.sh | bash
+curl -fsSL https://raw.githubusercontent.com/liongkj/wawa/main/scripts/install-server.sh | bash
 ```
 
-The installer offers to install Docker and Tailscale if they are missing. It creates a new workspace and OpenWA gateway, sets up their private API connection, and gives you a Tailscale address. Choose a workspace password when prompted. In the Mac app, select **Use another computer**, enter the address and password, and follow the setup screens. You still need to link WhatsApp on your phone, select conversations and sign in to Codex; the WhatsApp API key is handled for you.
+The installer offers to install Docker and Tailscale if they are missing. It pulls the server image `ghcr.io/liongkj/wawa:latest`, which GitHub Actions publishes for amd64 and arm64 on every merge to `main`, creates a new workspace and OpenWA gateway, sets up their private API connection, and gives you a Tailscale address. Choose a workspace password when prompted. In the Mac app, select **Use another computer**, enter the address and password, and follow the setup screens. You still need to link WhatsApp on your phone, select conversations and sign in to Codex; the WhatsApp API key is handled for you.
 
-Codex on a remote server uses a one-time device code. You may need to enable device-code sign-in in your ChatGPT security settings. The server must stay awake and online. Back up the installer folder and the Wawa Docker volumes, including the workspace, OpenWA data, and Codex session. Rerunning the installer uses its existing workspace. It refuses to take over a different Wawa Docker project or an existing Tailscale route.
+Codex on a remote server uses a one-time device code. You may need to enable device-code sign-in in your ChatGPT security settings. The server must stay awake and online. Back up the installer folder and the Wawa Docker volumes, including the workspace, OpenWA data, and Codex session. Rerunning the installer keeps the existing workspace and updates the server to the newest image. It refuses to take over a different Wawa Docker project or an existing Tailscale route.
+
+### Updates
+
+The installer writes `update.sh` into the server folder, `~/.local/share/wawa-server` by default, and enables a systemd timer that runs it nightly. The script refreshes the Compose file from the repository, pulls the newest `wawa` and OpenWA images, and recreates only the services whose image changed. Run it by hand to update immediately, or set `WAWA_AUTO_UPDATE=0` before the installer to skip the timer. Pin a release by setting `WAWA_IMAGE=ghcr.io/liongkj/wawa:v1.2.3` in the folder’s `.env`; version tags are published for Git tags starting with `v`, and `main-<sha>` tags exist for every build.
 
 This installer creates a new WhatsApp session; it does not move an existing session. To use an existing workspace such as Legion, connect to that workspace instead of installing another one. For a different installation location, set `WAWA_INSTALL_DIR` before running the script.
 

@@ -12,24 +12,28 @@ as_admin() {
     fail 'An administrator needs to run this step.'
   fi
 }
+need_tty() {
+  [ -r /dev/tty ] && [ -w /dev/tty ] || fail 'Run this command in an interactive terminal.'
+}
 confirm() {
   local answer
+  need_tty
   printf '%s [Y/n] ' "$1" > /dev/tty
   IFS= read -r answer < /dev/tty
   case "$answer" in ''|y|Y|yes|YES) return 0;; *) return 1;; esac
 }
 
 [ "$(uname -s)" = Linux ] || fail 'Run this installer on your Linux server.'
-[ -r /dev/tty ] && [ -w /dev/tty ] || fail 'Run this command in an interactive terminal.'
 command -v curl >/dev/null || fail 'Install curl, then run this command again.'
-command -v tar >/dev/null || fail 'Install tar, then run this command again.'
 command -v python3 >/dev/null || fail 'Install Python 3, then run this command again.'
+repo=${WAWA_REPO:-liongkj/wawa}
+ref=${WAWA_INSTALL_REF:-main}
+case "$ref" in *[!a-zA-Z0-9._/-]*|*..*|/*|'') fail 'The Wawa source version is invalid.';; esac
+case "$repo" in *[!a-zA-Z0-9._/-]*|*..*|/*|*/|'') fail 'The Wawa repository name is invalid.';; esac
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/wawa-install.XXXXXXXX")
-source_tmp=''
 env_tmp=''
 cleanup() {
   rm -rf "$scratch"
-  [ -z "$source_tmp" ] || rm -rf "$source_tmp"
   [ -z "$env_tmp" ] || rm -f "$env_tmp"
 }
 trap cleanup EXIT
@@ -63,6 +67,7 @@ with open(sys.argv[1]) as source:
 sys.exit(0 if status.get('BackendState') == 'Running' else 1)
 PY
 then
+  need_tty
   say 'Sign in to Tailscale on this server when prompted.'
   as_admin tailscale up
   tailscale status --json > "$scratch/tailscale-status.json"
@@ -80,8 +85,6 @@ PY
 )
 
 install_dir=${WAWA_INSTALL_DIR:-"$HOME/.local/share/wawa-server"}
-ref=${WAWA_INSTALL_REF:-main}
-case "$ref" in *[!a-zA-Z0-9._/-]*|*..*|/*|'') fail 'The Wawa source version is invalid.';; esac
 if [ -e "$install_dir" ] && [ ! -f "$install_dir/.wawa-managed" ]; then
   fail "The installation folder already exists and is not managed by this installer: $install_dir"
 fi
@@ -99,18 +102,21 @@ if [ ! -d "$install_dir" ]; then
   chmod 700 "$install_dir"
   printf 'wawa-server-v1\n' > "$install_dir/.wawa-managed"
 fi
-if [ ! -d "$install_dir/app" ]; then
-  say 'Downloading Wawa…'
-  curl -fsSL "https://codeload.github.com/liongkj/chat2tasks/tar.gz/refs/heads/$ref" -o "$scratch/wawa.tar.gz"
-  source_tmp=$(mktemp -d "$install_dir/.source.XXXXXXXX")
-  tar -xzf "$scratch/wawa.tar.gz" --strip-components=1 -C "$source_tmp"
-  [ -f "$source_tmp/deploy/server/compose.yml" ] || fail 'That Wawa version does not include the server installer.'
-  mv "$source_tmp" "$install_dir/app"
-  source_tmp=''
-fi
+
+# The server runs from the image published by GitHub Actions. Only the Compose
+# file is fetched from the repository, and it is refreshed on every run so an
+# update picks up service changes along with the new image.
+say 'Fetching the Wawa server definition…'
+curl -fsSL "https://raw.githubusercontent.com/$repo/$ref/deploy/server/compose.yml" -o "$scratch/compose.yml"
+grep -q '^services:' "$scratch/compose.yml" || fail 'That Wawa version does not include the server installer.'
+grep -q 'ghcr.io/' "$scratch/compose.yml" || fail 'That Wawa version does not publish a server image. Use a newer version.'
+mkdir -p "$expected_project_dir"
+install -m 600 "$scratch/compose.yml" "$expected_project_dir/compose.yml"
+find "$install_dir/app" -mindepth 1 -maxdepth 1 ! -name deploy -exec rm -rf {} +
 
 env_file="$install_dir/.env"
 if [ ! -f "$env_file" ]; then
+  need_tty
   tailscale serve status --json > "$scratch/serve.json"
   https_port=$(python3 - "$scratch/serve.json" <<'PY'
 import json, sys
@@ -171,18 +177,82 @@ if used and target != f'http://127.0.0.1:{local}':
     raise SystemExit('The saved Tailscale port is used by another service; nothing was changed.')
 PY
 
-compose=("${docker_cmd[@]}" compose --project-name wawa-server --env-file "$env_file" -f "$install_dir/app/deploy/server/compose.yml")
-say 'Starting Wawa and its WhatsApp connection. The first build can take several minutes…'
-if [ -f "$install_dir/.wawa-installed" ]; then
-  "${compose[@]}" up -d --no-build
-else
-  "${compose[@]}" up -d --build
-  printf 'installed\n' > "$install_dir/.wawa-installed"
+# A small updater lives next to the settings so a timer, or a person, can
+# refresh the image without re-running the interactive parts above.
+cat > "$install_dir/update.sh" <<EOF
+#!/usr/bin/env bash
+# Updates this Wawa server to the newest published image. Safe to re-run.
+set -euo pipefail
+install_dir=$(printf '%q' "$install_dir")
+repo=$(printf '%q' "$repo")
+ref=$(printf '%q' "$ref")
+docker_cmd=($(printf '%q ' "${docker_cmd[@]}"))
+compose_file="\$install_dir/app/deploy/server/compose.yml"
+tmp=\$(mktemp "\$install_dir/.compose.XXXXXXXX")
+trap 'rm -f "\$tmp"' EXIT
+if curl -fsSL "https://raw.githubusercontent.com/\$repo/\$ref/deploy/server/compose.yml" -o "\$tmp" && grep -q '^services:' "\$tmp"; then
+  install -m 600 "\$tmp" "\$compose_file"
 fi
+compose=("\${docker_cmd[@]}" compose --project-name wawa-server --env-file "\$install_dir/.env" -f "\$compose_file")
+before=\$("\${compose[@]}" images -q wawa 2>/dev/null || true)
+"\${compose[@]}" pull -q wawa openwa
+"\${compose[@]}" up -d --no-build --remove-orphans
+after=\$("\${compose[@]}" images -q wawa 2>/dev/null || true)
+if [ "\$before" != "\$after" ]; then
+  "\${docker_cmd[@]}" image prune -f --filter label=org.opencontainers.image.source=https://github.com/\$repo >/dev/null 2>&1 || true
+  echo "Wawa updated."
+else
+  echo "Wawa is already up to date."
+fi
+EOF
+chmod 700 "$install_dir/update.sh"
+
+compose=("${docker_cmd[@]}" compose --project-name wawa-server --env-file "$env_file" -f "$expected_project_dir/compose.yml")
+say 'Downloading the latest Wawa and starting it with its WhatsApp connection…'
+"${compose[@]}" pull -q wawa openwa
+"${compose[@]}" up -d --no-build --remove-orphans
 if ! tailscale serve --bg --https="$https_port" "http://127.0.0.1:$local_port"; then
   say 'Administrator access is needed to finish the private connection.'
   as_admin tailscale serve --bg --https="$https_port" "http://127.0.0.1:$local_port"
 fi
+
+auto_update=${WAWA_AUTO_UPDATE:-1}
+if [ "$auto_update" != 0 ] && command -v systemctl >/dev/null && [ -d /etc/systemd/system ]; then
+  run_as=$(id -un)
+  [ "${docker_cmd[0]}" != sudo ] || run_as=root
+  cat > "$scratch/wawa-server-update.service" <<EOF
+[Unit]
+Description=Update the Wawa server to the newest published image
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=$run_as
+ExecStart=$install_dir/update.sh
+EOF
+  cat > "$scratch/wawa-server-update.timer" <<'EOF'
+[Unit]
+Description=Check for Wawa server updates daily
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+  if as_admin install -m 644 "$scratch/wawa-server-update.service" "$scratch/wawa-server-update.timer" /etc/systemd/system/ &&
+    as_admin systemctl daemon-reload && as_admin systemctl enable --now wawa-server-update.timer >/dev/null 2>&1; then
+    say 'Wawa will check for updates every night. Run update.sh in the server folder to update now.'
+  else
+    say "Automatic updates were not enabled. Run $install_dir/update.sh to update."
+  fi
+elif [ "$auto_update" != 0 ]; then
+  say "This system has no systemd. Schedule $install_dir/update.sh yourself to receive updates."
+fi
+
 say 'Checking that your workspace is ready…'
 ready=false
 for _ in $(seq 1 60); do
