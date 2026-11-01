@@ -155,6 +155,70 @@ test('a new desktop chooses its workspace before starting a local server', async
   }
 });
 
+test('a desktop pairs with a server found on its tailnet using a short code', async () => {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext({
+    viewport: { width: 590, height: 730 },
+    httpCredentials: { username: 'admin', password },
+  });
+  try {
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      const calls: { command: string; args: unknown }[] = [];
+      let attempts = 0;
+      Object.defineProperty(window, '__workspaceCalls', { value: calls });
+      Object.defineProperty(window, '__TAURI_INTERNALS__', {
+        value: {
+          async invoke(command: string, args: unknown) {
+            calls.push({ command, args });
+            if (command === 'get_workspace_target') return { kind: 'unconfigured' };
+            if (command === 'discover_workspaces')
+              return {
+                ok: true,
+                servers: [
+                  {
+                    name: 'wa-service',
+                    host: 'wa-service.tail.ts.net',
+                    origin: 'https://wa-service.tail.ts.net:8443',
+                  },
+                ],
+              };
+            if (command === 'pair_workspace')
+              return ++attempts === 1
+                ? {
+                    ok: false,
+                    error:
+                      'That code is wrong or expired. Create a new code on the server and try again.',
+                  }
+                : { ok: true };
+            throw new Error(`Unexpected desktop command: ${command}`);
+          },
+        },
+      });
+    });
+    await page.goto(base + '/?desktop=workspace');
+    await page.getByRole('radio', { name: /Another computer/ }).check();
+    await page.getByRole('button', { name: 'wa-service' }).click();
+    await expect(page.getByLabel('Wawa server address')).toHaveValue('wa-service.tail.ts.net');
+    await expect(page.getByRole('button', { name: 'Use another computer' })).toBeEnabled();
+    await page.getByLabel('Pairing code').fill('1234 5678');
+    await page.getByRole('button', { name: 'Pair and connect' }).click();
+    await expect(page.getByRole('alert')).toHaveText(/wrong or expired/);
+    await page.getByRole('button', { name: 'Pair and connect' }).click();
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(window, '__workspaceCalls')))
+      .toContainEqual({
+        command: 'pair_workspace',
+        args: { server: 'wa-service.tail.ts.net', code: '1234 5678' },
+      });
+    const calls = await page.evaluate(() => Reflect.get(window, '__workspaceCalls') as unknown[]);
+    expect(JSON.stringify(calls)).not.toContain('set_workspace_target');
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+});
+
 test('a desktop can move a workspace here and retry confirmation', async () => {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({

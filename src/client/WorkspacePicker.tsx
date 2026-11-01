@@ -6,10 +6,15 @@ type WorkspaceTarget =
   { kind: 'unconfigured' } | { kind: 'local' } | { kind: 'remote'; url: string };
 type WorkspaceChoice = 'local' | 'remote' | 'move';
 type MoveResult = { ok: true; kind: 'complete' | 'ack_pending' } | { ok: false; error: string };
+type FoundServer = { name: string; host: string; origin: string };
+type Discovery = { ok: true; servers: FoundServer[] } | { ok: false; error: string };
+type PairResult = { ok: true } | { ok: false; error: string };
 
 export function WorkspacePicker() {
   const [kind, setKind] = useState<WorkspaceChoice | null>(null);
   const [address, setAddress] = useState('');
+  const [code, setCode] = useState('');
+  const [found, setFound] = useState<FoundServer[] | null>(null);
   const [sourcePassword, setSourcePassword] = useState('');
   const [targetOrigin, setTargetOrigin] = useState('');
   const [targetPassword, setTargetPassword] = useState('');
@@ -28,6 +33,23 @@ export function WorkspacePicker() {
       .catch(() => setError('Could not read the saved workspace choice. Choose where to work.'))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (kind !== 'remote' || found) return;
+    let cancelled = false;
+    void invoke<Discovery>('discover_workspaces')
+      .then((result) => {
+        if (!cancelled) setFound(result.ok ? result.servers : []);
+      })
+      .catch(() => {
+        if (!cancelled) setFound([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [kind, found]);
+
+  const pairing = kind === 'remote' && code.trim() !== '';
 
   async function connect() {
     if (!kind) return;
@@ -49,6 +71,14 @@ export function WorkspacePicker() {
         if (!result.ok) throw new Error(result.error);
         setMoveResult(result.kind);
         setSaving(false);
+        return;
+      }
+      if (pairing) {
+        const result = await invoke<PairResult>('pair_workspace', {
+          server: address.trim(),
+          code: code.trim(),
+        });
+        if (!result.ok) throw new Error(result.error);
         return;
       }
       const target: WorkspaceTarget = kind === 'local' ? { kind } : { kind, url: address };
@@ -119,18 +149,60 @@ export function WorkspacePicker() {
       {(kind === 'remote' || kind === 'move') && (
         <div className="workspace-picker-address">
           <label htmlFor="workspace-server">Wawa server address</label>
+          {kind === 'remote' && found === null && (
+            <small role="status">Looking for Wawa servers on your tailnet…</small>
+          )}
+          {kind === 'remote' && found && found.length > 0 && (
+            <div className="workspace-picker-found" aria-label="Servers found on your tailnet">
+              {found.map((server) => (
+                <button
+                  key={server.origin}
+                  type="button"
+                  className={`button secondary ${address === server.host ? 'selected' : ''}`}
+                  aria-pressed={address === server.host}
+                  onClick={() => setAddress(server.host)}
+                >
+                  {server.name}
+                </button>
+              ))}
+            </div>
+          )}
           <input
             id="workspace-server"
-            type="url"
+            type={kind === 'remote' ? 'text' : 'url'}
             autoComplete="url"
-            placeholder="https://your-server.tailnet.ts.net"
+            spellCheck={false}
+            placeholder={
+              kind === 'remote'
+                ? 'wa-service, tasks.example.com, or https://…'
+                : 'https://your-server.tailnet.ts.net'
+            }
             value={address}
             onChange={(event) => setAddress(event.target.value)}
           />
           <small>
-            Use a private Tailscale HTTPS address or another secure address for your running Wawa
-            workspace.
+            {kind === 'remote'
+              ? 'On a tailnet the server name is enough. Otherwise use its domain or IP address.'
+              : 'Use a private Tailscale HTTPS address or another secure address for your running Wawa workspace.'}
           </small>
+          {kind === 'remote' && (
+            <>
+              <label htmlFor="workspace-code">Pairing code</label>
+              <input
+                id="workspace-code"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                placeholder="1234 5678"
+                value={code}
+                onChange={(event) => setCode(event.target.value)}
+              />
+              <small>
+                Create a code on the server in Settings → Workspaces, or run{' '}
+                <code>update.sh pair</code> there. Leave it empty to sign in with the workspace
+                password instead.
+              </small>
+            </>
+          )}
         </div>
       )}
       {kind === 'move' && (
@@ -257,18 +329,22 @@ export function WorkspacePicker() {
           {saving
             ? kind === 'move'
               ? 'Moving workspace…'
-              : 'Opening workspace…'
+              : pairing
+                ? 'Pairing…'
+                : 'Opening workspace…'
             : moveResult === 'complete' && kind === 'move'
               ? 'Open workspace here'
               : moveResult === 'ack_pending' && kind === 'move'
                 ? 'Retry confirmation'
                 : kind === 'move'
                   ? 'Move workspace here'
-                  : kind === 'remote'
-                    ? 'Use another computer'
-                    : kind === 'local'
-                      ? 'Use this computer'
-                      : 'Choose a workspace'}
+                  : pairing
+                    ? 'Pair and connect'
+                    : kind === 'remote'
+                      ? 'Use another computer'
+                      : kind === 'local'
+                        ? 'Use this computer'
+                        : 'Choose a workspace'}
         </button>
       </div>
     </main>

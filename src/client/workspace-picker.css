@@ -60,6 +60,15 @@
 .workspace-picker-address label {
   font-weight: 600;
 }
+.workspace-picker-found {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.workspace-picker-found .button.selected {
+  border-color: #2d806b;
+  background: #f2faf6;
+}
 .workspace-picker-address input {
   width: 100%;
   padding: 10px;
