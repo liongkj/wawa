@@ -15,7 +15,7 @@ The companion already has a better model: the workspace shows a one-time code, t
 3. A second Mac pairs the same way. Anyone already connected creates a new code from **Settings → Workspaces → Pair another computer**. On the server, `update.sh pair` prints one.
 4. **Settings → Workspaces → Paired computers** lists each computer with its last use and a **Disconnect** button. A disconnected computer returns to the picker on its next request.
 
-The password still exists for browsers and for existing installations. The installer generates it instead of asking, stores it in the server folder, and shows it only on request.
+The password still exists for browsers and for existing installations. The installer generates it instead of asking, stores it in the server folder, and prints it once at the end of the install next to the pairing code, with a note that `update.sh password` shows it again.
 
 ## Shape
 
@@ -62,7 +62,7 @@ Desktop codes are eight decimal digits so they can be read aloud and typed on a 
 
 Guessing is bounded, not prevented, by the code length: ten million possibilities against a ten-minute window. The server counts failed pairing attempts per client address and refuses further attempts for fifteen minutes after five failures. After twenty failures from any address within the window, the live code is deleted and a notice appears in the workspace. Pairing is refused over plain HTTP unless the host is loopback.
 
-A successful exchange creates a device row with a random name supplied by the app, such as `KJ's MacBook Air`, and returns a token of the existing `c2t_` form valid for one year. The server extends a token that is used with fewer than thirty days remaining and sends the replacement in a response header, so a computer in regular use never re-pairs.
+A successful exchange creates a device row with a random name supplied by the app, such as `KJ's MacBook Air`, and returns a token of the existing `c2t_` form. When a token is used with less than a third of its lifetime remaining, the server moves the device row's expiry forward by a full lifetime; the token itself does not change, so nothing new reaches the computer and a computer in regular use never re-pairs. The lifetime therefore answers one question: how long may a computer sit unused before it must pair again. The person creating the code chooses it, as **Stay connected while unused for** 30 days, 90 days, or 1 year, with 1 year as the default; `update.sh pair` takes the same choice as `--days`. The code carries the choice and the device row keeps it, so extensions reuse it. Browser codes keep their current fixed 90 days.
 
 ### Signing the window in
 
@@ -92,7 +92,7 @@ Do not move the remote window to an injected bearer header. The window is the se
 
 ## Verification
 
-- Unit tests on the pairing service: eight-digit codes, single use, expiry, kind mismatch refused, per-address lockout, global lockout deletes the live code, token extension near expiry, revocation ends the session.
+- Unit tests on the pairing service: eight-digit codes, single use, expiry, kind mismatch refused, per-address lockout, global lockout deletes the live code, lifetime chosen on the code carried to the device, expiry moved forward near the end of the lifetime, revocation ends the session.
 - Server tests for `/api/pair/info`, `/api/pair`, and `/desktop-sign-in/device`, including refusal over plain HTTP on a non-loopback host and the disconnected page.
 - Lockout tests behind a proxy: failures are counted per forwarded client address, and a forwarded-address header from anything other than the configured proxy is ignored.
 - Playwright coverage for the Paired computers rows and the code dialog.
@@ -105,5 +105,3 @@ Do not move the remote window to an injected bearer header. The window is the se
 2. Desktop: picker with peer discovery, name, code, and probe; identity-based connect if the header check passes; token storage; initialisation script; disconnected handling. Needs a desktop build, published through the existing preview workflow.
 3. Installer: the route question with the Caddy domain path and the Cloudflare Tunnel path, random password instead of a prompt, Standard engine by default, final pairing code, `update.sh pair`. Docs in README, `docs/desktop.md`, and `docs/docker-stack.md`.
 4. Installer: the public IP route, after a manual pass on a fresh VPS confirms Caddy obtains and renews a `shortlived` IP certificate.
-
-Open questions for the owner: whether the generated password should be printed at install time or only on request, and whether one year is the right token lifetime for a personal server.
