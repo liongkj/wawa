@@ -35,7 +35,13 @@ import { RemoteEvents } from './remote-events.js';
 import { WorkspaceOwnership } from './workspace-ownership.js';
 import { MoveGate } from './move-gate.js';
 import { registerServerMoveRoutes } from './server-move-routes.js';
-import { validDesktopSession } from './desktop-session.js';
+import { deviceSessionId, validDesktopSession } from './desktop-session.js';
+import {
+  DesktopPairing,
+  isUnauthenticatedPairingRequest,
+  registerDesktopPairing,
+  trustedProxies,
+} from './desktop-pairing.js';
 import { UserError } from './errors.js';
 
 const port = z.coerce
@@ -103,7 +109,9 @@ const server = Fastify({
   logger: { level: 'info', redact: ['req.headers.authorization', 'req.headers.cookie'] },
   bodyLimit: 2_000_000,
   disableRequestLogging: true,
+  trustProxy: trustedProxies(process.env.TRUSTED_PROXIES),
 });
+const desktopPairing = new DesktopPairing(store);
 const moveGate = moveEnabled ? new MoveGate(server) : undefined;
 const startupAbort = new AbortController();
 let starting: Promise<void> = Promise.resolve();
@@ -207,7 +215,11 @@ server.addHook('onRequest', async (request, reply) => {
       .code(403)
       .send({ error: 'Host is not allowed. Set PUBLIC_ORIGIN for your reverse proxy.' });
   if (request.url === '/api/health') return;
-  if (request.url === '/desktop-sign-in' && ['GET', 'POST'].includes(request.method)) {
+  if (isUnauthenticatedPairingRequest(request.method, request.url)) return;
+  if (
+    request.url.split('?')[0] === '/desktop-sign-in' &&
+    ['GET', 'POST'].includes(request.method)
+  ) {
     // WebKit sends a null Origin for form posts under no-referrer, so retain the
     // origin only for this same-origin sign-in page.
     reply.header('Referrer-Policy', 'same-origin');
@@ -231,7 +243,16 @@ server.addHook('onRequest', async (request, reply) => {
     request.headers.host === new URL(desktopSharing.origin).host;
   if (tauriToken && request.url.startsWith('/api/') && !localSession && !sharedHost)
     return reply.code(403).send({ error: 'The workspace session is not authorized.' });
-  if (workspacePassword && !localSession) {
+  const deviceId = deviceSessionId(request.headers.cookie ?? '', store.key);
+  const deviceSession = deviceId !== undefined && desktopPairing.sessionValid(deviceId);
+  if (workspacePassword && !localSession && deviceId !== undefined && !deviceSession) {
+    if (request.method === 'GET' && !request.url.startsWith('/api/'))
+      return reply.code(303).header('Location', '/desktop-sign-in?disconnected=1').send();
+    return reply
+      .code(401)
+      .send({ error: 'This computer was disconnected from the workspace. Pair it again.' });
+  }
+  if (workspacePassword && !localSession && !deviceSession) {
     const expected = Buffer.from(
         `Basic ${Buffer.from(`admin:${workspacePassword}`).toString('base64')}`,
       ),
@@ -274,7 +295,16 @@ server.post('/api/search', async (request) => {
   const { query, retry } = SearchRequestSchema.parse(request.body);
   return localSearch.find(query, retry);
 });
-registerDesktopSignIn(server, { key: store.key, password: workspacePassword, origins });
+registerDesktopSignIn(server, {
+  key: store.key,
+  password: workspacePassword,
+  origins,
+  deviceSignedIn: (cookie) => {
+    const id = deviceSessionId(cookie, store.key);
+    return id !== undefined && desktopPairing.sessionValid(id);
+  },
+});
+registerDesktopPairing(server, desktopPairing, { key: store.key, origins });
 await registerCompanion(
   server,
   new Companion(store, sync, syncEnabled),
