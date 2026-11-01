@@ -24,23 +24,54 @@ export class CompanionError extends UserError {
 }
 const digest = (value: string) => hash(value);
 const DeviceRow = z.object({ id: z.string(), origin: z.string(), expires: z.number() });
+
+/**
+ * Pairing codes and paired devices are shared by browsers and computers. `kind` keeps them
+ * apart; `lifetime` (seconds) is set only for computers, whose owner chooses it per code.
+ */
+export function migratePairingTables(store: Store) {
+  store.db
+    .exec(`CREATE TABLE IF NOT EXISTS companion_codes(digest TEXT PRIMARY KEY,expires REAL NOT NULL);
+    CREATE TABLE IF NOT EXISTS companion_devices(id TEXT PRIMARY KEY,name TEXT NOT NULL,token_digest TEXT NOT NULL UNIQUE,origin TEXT NOT NULL,created REAL NOT NULL,last_used REAL,expires REAL NOT NULL,revoked REAL);
+    CREATE TABLE IF NOT EXISTS companion_captures(id TEXT PRIMARY KEY,message_id TEXT NOT NULL REFERENCES messages(id),device_id TEXT NOT NULL REFERENCES companion_devices(id),digest TEXT NOT NULL);`);
+  const columns = (table: string) =>
+    new Set(
+      store.db
+        .prepare(`SELECT name FROM pragma_table_info('${table}')`)
+        .all()
+        .map((row) => z.object({ name: z.string() }).parse(row).name),
+    );
+  const kind = "kind TEXT NOT NULL DEFAULT 'browser' CHECK(kind IN ('browser','desktop'))";
+  store.transaction(() => {
+    const codes = columns('companion_codes'),
+      devices = columns('companion_devices');
+    if (!codes.has('kind')) store.db.exec(`ALTER TABLE companion_codes ADD COLUMN ${kind}`);
+    if (!codes.has('lifetime'))
+      store.db.exec('ALTER TABLE companion_codes ADD COLUMN lifetime REAL');
+    if (!codes.has('failures'))
+      store.db.exec('ALTER TABLE companion_codes ADD COLUMN failures INTEGER NOT NULL DEFAULT 0');
+    if (!devices.has('kind')) store.db.exec(`ALTER TABLE companion_devices ADD COLUMN ${kind}`);
+    if (!devices.has('lifetime'))
+      store.db.exec('ALTER TABLE companion_devices ADD COLUMN lifetime REAL');
+  });
+}
+
 export class Companion {
   constructor(
     readonly store: Store,
     readonly sync: Pick<Sync, 'notify' | 'wake' | 'reconfigure'>,
     readonly enabled: boolean,
   ) {
-    store.db
-      .exec(`CREATE TABLE IF NOT EXISTS companion_codes(digest TEXT PRIMARY KEY,expires REAL NOT NULL);
-      CREATE TABLE IF NOT EXISTS companion_devices(id TEXT PRIMARY KEY,name TEXT NOT NULL,token_digest TEXT NOT NULL UNIQUE,origin TEXT NOT NULL,created REAL NOT NULL,last_used REAL,expires REAL NOT NULL,revoked REAL);
-      CREATE TABLE IF NOT EXISTS companion_captures(id TEXT PRIMARY KEY,message_id TEXT NOT NULL REFERENCES messages(id),device_id TEXT NOT NULL REFERENCES companion_devices(id),digest TEXT NOT NULL);`);
+    migratePairingTables(store);
   }
   createCode() {
     const raw = randomBytes(8).toString('hex').toUpperCase(),
       expiresAt = now() + 300;
     this.store.transaction(() => {
-      this.store.db.exec('DELETE FROM companion_codes');
-      this.store.db.prepare('INSERT INTO companion_codes VALUES(?,?)').run(digest(raw), expiresAt);
+      this.store.db.exec("DELETE FROM companion_codes WHERE kind='browser'");
+      this.store.db
+        .prepare("INSERT INTO companion_codes(digest,expires,kind) VALUES(?,?,'browser')")
+        .run(digest(raw), expiresAt);
     });
     return { code: raw.match(/.{4}/g)?.join('-') ?? raw, expiresAt };
   }
@@ -52,7 +83,9 @@ export class Companion {
       expiresAt = timestamp + 90 * 86400;
     return this.store.transaction(() => {
       const row = this.store.db
-        .prepare('DELETE FROM companion_codes WHERE digest=? AND expires>? RETURNING digest')
+        .prepare(
+          "DELETE FROM companion_codes WHERE digest=? AND expires>? AND kind='browser' RETURNING digest",
+        )
         .get(digest(code.replace(/[-\s]/g, '').toUpperCase()), timestamp);
       if (!row)
         throw new CompanionError(
@@ -60,7 +93,9 @@ export class Companion {
           'The pairing code expired or was already used. Create a new code in your workspace.',
         );
       this.store.db
-        .prepare('INSERT INTO companion_devices VALUES(?,?,?,?,?,?,?,NULL)')
+        .prepare(
+          "INSERT INTO companion_devices(id,name,token_digest,origin,created,last_used,expires,kind) VALUES(?,?,?,?,?,?,?,'browser')",
+        )
         .run(
           deviceId,
           name,
@@ -77,7 +112,7 @@ export class Companion {
     const parsed = DeviceRow.safeParse(
       this.store.db
         .prepare(
-          'SELECT id,origin,expires FROM companion_devices WHERE token_digest=? AND revoked IS NULL AND expires>?',
+          "SELECT id,origin,expires FROM companion_devices WHERE token_digest=? AND revoked IS NULL AND expires>? AND kind='browser'",
         )
         .get(digest(token), now()),
     );
@@ -97,14 +132,16 @@ export class Companion {
     return {
       devices: this.store.db
         .prepare(
-          'SELECT id,name,created,last_used AS lastUsed,expires AS expiresAt FROM companion_devices WHERE revoked IS NULL AND expires>? ORDER BY created DESC',
+          "SELECT id,name,created,last_used AS lastUsed,expires AS expiresAt FROM companion_devices WHERE revoked IS NULL AND expires>? AND kind='browser' ORDER BY created DESC",
         )
         .all(now())
         .map((row) => DeviceSchema.parse(row)),
     };
   }
   revoke(id: string) {
-    this.store.db.prepare('UPDATE companion_devices SET revoked=? WHERE id=?').run(now(), id);
+    this.store.db
+      .prepare("UPDATE companion_devices SET revoked=? WHERE id=? AND kind='browser'")
+      .run(now(), id);
   }
   state() {
     const snapshot = this.store.snapshot(),

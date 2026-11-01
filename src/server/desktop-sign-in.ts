@@ -15,11 +15,13 @@ export type DesktopSignInOptions = {
   password: string;
   /** Origins allowed to post the form. */
   origins: ReadonlySet<string>;
+  /** Whether the request already carries a working paired-computer session. */
+  deviceSignedIn?: (cookieHeader: string) => boolean;
 };
 
 /** HTML sign-in page for desktop and shared workspaces; sets the desktop session cookie. */
 export function registerDesktopSignIn(server: FastifyInstance, options: DesktopSignInOptions) {
-  const { key, password, origins } = options;
+  const { key, password, origins, deviceSignedIn = () => false } = options;
   server.addContentTypeParser(
     'application/x-www-form-urlencoded',
     { parseAs: 'string', bodyLimit: 4096 },
@@ -28,12 +30,17 @@ export function registerDesktopSignIn(server: FastifyInstance, options: DesktopS
     },
   );
   server.get('/desktop-sign-in', (request, reply) => {
-    if (!password || validDesktopSession(request.headers.cookie ?? '', key, password))
+    const cookie = request.headers.cookie ?? '';
+    if (!password || validDesktopSession(cookie, key, password) || deviceSignedIn(cookie))
       return reply.code(303).header('Location', '/').send();
+    const { disconnected } = z
+      .object({ disconnected: z.literal('1').optional() })
+      .catch({})
+      .parse(request.query);
     return reply
       .header('Content-Security-Policy', desktopSignInCsp)
       .type('text/html')
-      .send(desktopSignInPage());
+      .send(desktopSignInPage(false, Boolean(disconnected)));
   });
   server.post('/desktop-sign-in', (request, reply) => {
     const origin = request.headers.origin;

@@ -2,15 +2,15 @@ import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import Fastify from 'fastify';
+import Fastify, { type FastifyServerOptions } from 'fastify';
 import { z } from 'zod';
 import { Store } from '../src/server/store.js';
 import { UserError } from '../src/server/errors.js';
 import { MessageSchema, TaskChangeSchema } from '../src/shared/schema.js';
 
 /** A Fastify instance with the same UserError and Zod handling as the real server. */
-export function routeServer() {
-  const server = Fastify();
+export function routeServer(options: FastifyServerOptions = {}) {
+  const server = Fastify(options);
   server.setErrorHandler((error, _request, reply) => {
     if (error instanceof UserError)
       return reply.code(error.statusCode).send({ error: error.message });
