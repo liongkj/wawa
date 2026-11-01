@@ -2264,3 +2264,27 @@ test('desktop opens its workspace when the server becomes available after startu
     await browser.close();
   }
 });
+test('model settings list connections as cards and switch the one in use', async () => {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext({ httpCredentials: { username: 'admin', password } });
+  try {
+    const page = await context.newPage();
+    await page.goto(base + '?view=settings&settingsSection=models');
+    const codex = page.getByRole('region', { name: 'Codex connection' });
+    await expect(codex).toContainText('In use');
+    await expect(codex.getByLabel('Model ID')).toHaveValue('gpt-6-luna');
+    await page.getByRole('button', { name: 'Add connection', exact: true }).click();
+    await page.getByRole('button', { name: /OpenAI-compatible API/ }).click();
+    const added = page.getByRole('region', { name: 'Compatible API connection' });
+    await expect(added.getByLabel('API base URL')).toHaveValue('https://api.openai.com/v1');
+    await expect(added.getByRole('textbox', { name: 'Provider API key' })).toBeVisible();
+    await added.getByRole('button', { name: 'Use connection' }).click();
+    await expect(added).toContainText('In use');
+    await expect(codex).not.toContainText('In use');
+    await expect(codex.getByRole('button', { name: 'Use connection' })).toBeVisible();
+    await expect(page.getByText('You have unsaved changes.')).toBeVisible();
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+});
