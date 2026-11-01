@@ -7,6 +7,8 @@ fn main() {
             "open_external",
             "open_workspace_picker",
             "retry_remote_workspace",
+            "discover_workspaces",
+            "pair_workspace",
             "get_workspace_target",
             "set_workspace_target",
             "close_workspace_picker",

@@ -8,6 +8,8 @@
     "allow-get-workspace-target",
     "allow-set-workspace-target",
     "allow-move-workspace",
-    "allow-close-workspace-picker"
+    "allow-close-workspace-picker",
+    "allow-discover-workspaces",
+    "allow-pair-workspace"
   ]
 }

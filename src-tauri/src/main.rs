@@ -24,7 +24,7 @@ use tauri::{
 };
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
-use workspace_target::WorkspaceTarget;
+use workspace_target::{DeviceToken, WorkspaceTarget};
 
 struct Supervisor {
     child: Child,
@@ -162,6 +162,58 @@ async fn move_workspace(
     }).await.map_err(|_| "The move stopped unexpectedly.".to_string())?
 }
 
+fn run_pair_client(app: &tauri::AppHandle, input: Value) -> Result<Value, String> {
+    let resources = app.path().resource_dir().map_err(|_| "Could not find app resources.")?;
+    let bun = resources.join("bun").join(if cfg!(windows) { "bun.exe" } else { "bun" });
+    let mut command = Command::new(bun);
+    command.arg(resources.join("runtime").join("dist").join("desktop").join("pair-client.mjs"))
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    #[cfg(target_os = "windows")]
+    command.creation_flags(0x08000000);
+    let mut child = command.spawn().map_err(|_| "Could not start pairing.")?;
+    let mut stdin = child.stdin.take().ok_or("Could not start pairing.")?;
+    serde_json::to_writer(&mut stdin, &input).map_err(|_| "Could not start pairing.")?;
+    drop(stdin);
+    let result = child.wait_with_output().map_err(|_| "Pairing stopped unexpectedly.")?;
+    if !result.status.success() || result.stdout.len() > 65536 {
+        return Err("Pairing stopped unexpectedly. Try again.".into());
+    }
+    serde_json::from_slice(&result.stdout).map_err(|_| "Pairing returned an invalid response.".into())
+}
+
+#[tauri::command]
+async fn discover_workspaces(app: tauri::AppHandle) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        run_pair_client(&app, json!({"action": "discover"}))
+    })
+    .await
+    .map_err(|_| "Could not look for servers.".to_string())?
+}
+
+/// Pairs with a code, keeps the token on disk, and reopens the app on that server. The token
+/// is never returned to the picker window.
+#[tauri::command]
+async fn pair_workspace(app: tauri::AppHandle, server: String, code: String) -> Result<Value, String> {
+    let data = app.path().app_data_dir().map_err(|_| "Could not find app data.")?;
+    let handle = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        run_pair_client(&handle, json!({"action": "pair", "server": server, "code": code}))
+    })
+    .await
+    .map_err(|_| "Pairing stopped unexpectedly.".to_string())??;
+    if result["ok"] != json!(true) {
+        let error = result["error"].as_str().unwrap_or("Pairing could not be completed.");
+        return Ok(json!({"ok": false, "error": error}));
+    }
+    let (Some(origin), Some(token)) = (result["origin"].as_str(), result["token"].as_str()) else {
+        return Err("Pairing returned an invalid response.".into());
+    };
+    workspace_target::save_device_token(&data, &DeviceToken { origin: origin.into(), token: token.into() })?;
+    workspace_target::save(&data, WorkspaceTarget::Remote { url: origin.into() })?;
+    app.request_restart();
+    Ok(json!({"ok": true}))
+}
+
 #[tauri::command]
 fn open_external(app: tauri::AppHandle, url: String) -> Result<(), String> {
     let parsed = tauri::Url::parse(&url).map_err(|_| "Unexpected sign-in address.")?;
@@ -270,6 +322,15 @@ fn show_remote_workspace(app: &tauri::AppHandle, address: &str) -> Result<(), St
     let url = remote_login_url(address)?;
     let origin = url.origin();
     let loaded_origin = origin.clone();
+    let data = app.path().app_data_dir().map_err(|_| "Could not find app data.")?;
+    let device_script = workspace_target::read_device_token(&data, &origin.ascii_serialization())
+        .map(|token| {
+            format!(
+                "if (window.location.origin === {}) Object.defineProperty(window, 'wawaDevice', {{ value: Object.freeze({{ token: {} }}) }});",
+                json!(origin.ascii_serialization()),
+                json!(token)
+            )
+        });
     let hostname = url.host_str().unwrap_or("server").to_string();
     let title = format!("Wawa · {hostname}");
     let connecting = WebviewWindowBuilder::new(
@@ -291,13 +352,26 @@ fn show_remote_workspace(app: &tauri::AppHandle, address: &str) -> Result<(), St
     });
 
     let external = app.clone();
-    let window = WebviewWindowBuilder::new(app, "remote", WebviewUrl::External(url))
+    let mut builder = WebviewWindowBuilder::new(app, "remote", WebviewUrl::External(url));
+    if let Some(script) = device_script {
+        builder = builder.initialization_script(script);
+    }
+    let window = builder
         .title("Wawa · Connecting to server…")
         .inner_size(1140.0, 800.0)
         .min_inner_size(680.0, 580.0)
         .visible(false)
         .on_navigation(move |url| url.origin() == origin)
         .on_page_load(move |window, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
+                && payload.url().origin() == loaded_origin
+                && payload.url().path() == "/desktop-sign-in"
+                && payload.url().query_pairs().any(|(key, value)| key == "disconnected" && value == "1")
+            {
+                // The server revoked or expired this computer: forget the token, offer the picker.
+                workspace_target::clear_device_token(&data);
+                let _ = show_workspace_picker(window.app_handle());
+            }
             if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
                 && payload.url().origin() == loaded_origin
             {
@@ -333,7 +407,7 @@ fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![choose_import, import_workspace, move_workspace, open_external, open_workspace_picker, restart_app, retry_remote_workspace, get_workspace_target, set_workspace_target, close_workspace_picker])
+        .invoke_handler(tauri::generate_handler![choose_import, import_workspace, move_workspace, open_external, open_workspace_picker, restart_app, retry_remote_workspace, discover_workspaces, pair_workspace, get_workspace_target, set_workspace_target, close_workspace_picker])
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open" => show_main(app),
             "settings" => {
