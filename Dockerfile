@@ -6,6 +6,9 @@ COPY . .
 RUN npm run build && npm prune --omit=dev
 
 FROM node:24-bookworm-slim
+LABEL org.opencontainers.image.source=https://github.com/liongkj/wawa \
+      org.opencontainers.image.description="Wawa server: turns WhatsApp conversations into tasks" \
+      org.opencontainers.image.licenses=MIT
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates bubblewrap ffmpeg \
  && rm -rf /var/lib/apt/lists/* \
  && npm install --global @openai/codex@0.163.0
