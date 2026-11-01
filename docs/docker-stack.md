@@ -49,6 +49,18 @@ tasks.example.com {
 
 Preserve the original `Host` and `Origin`. The server validates the workspace origin for owner mutations. Companion requests use their own extension origin, a device token, and `X-Chat2Tasks-Extension`; the proxy must pass those headers through. Do not replace all origins with localhost or add wildcard CORS.
 
+Pairing a computer locks out an address after five wrong codes for fifteen minutes. Behind a proxy every request appears to come from the proxy, so one stranger could lock everyone out. Set `TRUSTED_PROXIES` to the proxy's address as the app container sees it, or a CIDR range such as `172.16.0.0/12` for a proxy container on a Docker network, and the server counts the address in `X-Forwarded-For` instead. It believes that header only from the listed addresses. Leave it unset when nothing proxies the app.
+
+### Pair a computer
+
+A computer can connect with a one-time eight-digit code instead of the password. Create the code in **Settings → Workspaces → Paired computers**, or on the server:
+
+```sh
+docker compose exec chat2tasks node dist/server/pair-cli.js --days 365
+```
+
+`--days` is how long a paired computer may sit unused before it must pair again: 30, 90 or 365. Regular use keeps it connected. The code works once, expires after ten minutes, and is accepted only over HTTPS or on the server itself. Disconnect a computer from the same Settings group; it is signed out on its next request. The desktop app support for entering the code is a separate release.
+
 ## Tailscale access
 
 Join the server and desktop to the same tailnet. Enable HTTPS for the tailnet, inspect `tailscale serve status`, and choose a free HTTPS port. For a Chat2Tasks service published on the server's loopback port 2786, a route can be created with:

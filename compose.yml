@@ -11,6 +11,7 @@ services:
       ADDITIONAL_ORIGINS: ${ADDITIONAL_ORIGINS:-}
       APP_PASSWORD: ${APP_PASSWORD:-}
       TRUST_PROXY_AUTH: ${TRUST_PROXY_AUTH:-false}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
       MCP_TOKEN: ${MCP_TOKEN:-}
     volumes:
       - task-data:/app/data
