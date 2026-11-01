@@ -10,8 +10,8 @@ The companion already has a better model: the workspace shows a one-time code, t
 
 ## Usage
 
-1. The installer asks one question, private through Tailscale or public through a domain, then installs what it needs and finishes with the server name and an eight-digit code valid for ten minutes. It no longer asks for a password or a WhatsApp engine; Standard is the default and the engine can be changed in Settings.
-2. In the Mac app, choose **Use another computer**. On a tailnet the app lists the Wawa servers it finds, so only the code is typed. Otherwise type the domain and the code. The app exchanges the code for a device token and opens the workspace. No password is typed.
+1. The installer asks one question, how other computers reach this server (Tailscale, a public domain, a public IP address, or Cloudflare Tunnel), then installs what it needs and finishes with the server name and an eight-digit code valid for ten minutes. It no longer asks for a password or a WhatsApp engine; Standard is the default and the engine can be changed in Settings.
+2. In the Mac app, choose **Use another computer**. On a tailnet the app lists the Wawa servers it finds, so only the code is typed. Otherwise type the domain, IP address, or tunnel hostname, and the code. The app exchanges the code for a device token and opens the workspace. No password is typed.
 3. A second Mac pairs the same way. Anyone already connected creates a new code from **Settings → Workspaces → Pair another computer**. On the server, `update.sh pair` prints one.
 4. **Settings → Workspaces → Paired computers** lists each computer with its last use and a **Disconnect** button. A disconnected computer returns to the picker on its next request.
 
@@ -31,9 +31,24 @@ When the Tailscale app is installed on the Mac, the picker probes every online p
 
 ### Access routes
 
-Tailscale is recommended, not required. The installer asks one question first: reach this server privately through Tailscale, or publicly through a domain you own. The recommendation depends on where the server is. A computer at home sits behind a router, so a public route needs a port forward and a domain that follows a changing address; Tailscale is simpler there. A rented server has a public address already, so a domain and an A record are simpler than installing Tailscale on every Mac.
+Tailscale is recommended, not required. The installer asks one question first: how should other computers reach this server. The recommendation depends on where the server is and what the owner already has.
 
-The public route adds a Caddy container that obtains a Let’s Encrypt certificate and proxies to Wawa. Before starting it, the installer checks that the domain resolves to this machine and that port 443 answers from outside, and prints the exact fix when either fails. The server name in the picker is then the domain, and the Mac needs no Tailscale. Pairing is unchanged, but the lockouts matter more because the endpoint is reachable from anywhere, and the identity-header shortcut below is unavailable, so the code is the only path. Cloudflare Tunnel suits a home computer without port forwarding, but it needs an account and a token, so it stays in the docs rather than the installer.
+| Route                   | Best for                                       | Needs                                                    | Name in the picker            |
+| ----------------------- | ---------------------------------------------- | -------------------------------------------------------- | ----------------------------- |
+| Tailscale (recommended) | A computer at home                             | Tailscale on the server and on each Mac                  | MagicDNS name, found by probe |
+| Public domain           | A rented server with a domain                  | An A record to the server, ports 80 and 443 open         | The domain                    |
+| Public IP address       | A rented server without a domain               | A static public IPv4 address, ports 80 and 443 open      | The IP address                |
+| Cloudflare Tunnel       | A computer at home with a domain on Cloudflare | A Cloudflare account, a domain on it, and a tunnel token | The tunnel hostname           |
+
+A computer at home sits behind a router, so the public routes need a port forward and an address that follows a changing home IP; Tailscale or Cloudflare Tunnel is simpler there. A rented server has a public address already, so a public route is simpler than installing Tailscale on every Mac.
+
+On every route other than Tailscale the Mac needs nothing installed, pairing is unchanged, and the code is the only path because the identity-header shortcut below is unavailable. The lockouts matter more there because the endpoint is reachable from anywhere. Behind Caddy or Cloudflare the server must count failures by the forwarded client address, `X-Forwarded-For` from Caddy or `CF-Connecting-IP` from Cloudflare, and trust that header only from its own proxy container; otherwise every attempt appears to come from the proxy and one stranger locks everyone out.
+
+**Public domain.** A Caddy container obtains a Let’s Encrypt certificate and proxies to Wawa. Before starting it, the installer checks that the domain resolves to this machine and that ports 80 and 443 answer from outside, and prints the exact fix when either fails.
+
+**Public IP address.** The same Caddy container, with no domain. Let’s Encrypt issues certificates for IP addresses only under its `shortlived` profile, valid for about six days, and Caddy selects it with `issuer acme { profile shortlived }`. Caddy renews well before expiry, so the short life costs nothing while the server runs, but a server that is off for a week starts with an expired certificate and renews on boot. Caddy marks ACME profiles experimental, so this route needs its own manual pass on a fresh VPS before the installer offers it. An address that changes breaks every paired computer, so the installer refuses addresses it can tell are dynamic or private and recommends a domain instead. Self-signed certificates with a pinned fingerprint were considered and rejected: the desktop app could pin, but browsers and the companion would show certificate warnings.
+
+**Cloudflare Tunnel.** `cloudflared` dials out to Cloudflare, so a home computer needs no port forward and no public address. A named tunnel needs a domain whose DNS is on Cloudflare; the owner creates the tunnel and its public hostname in the Cloudflare dashboard, points the hostname at `http://wawa:PORT`, and pastes the tunnel token into the installer. The installer runs a `cloudflared` container with that token and confirms the hostname reaches the pairing info endpoint. The token is a credential, so it is read from a prompt or stdin and written only to the server folder’s `.env`, never accepted as a command argument. Quick Tunnels, the account-free `trycloudflare.com` addresses, were rejected: the hostname changes every time `cloudflared` restarts, which would break every paired computer after each update, they carry no uptime guarantee, and they do not deliver Server-Sent Events, which the MCP endpoint’s streamable HTTP transport can answer with.
 
 ### Code only, and no code
 
@@ -79,6 +94,7 @@ Do not move the remote window to an injected bearer header. The window is the se
 
 - Unit tests on the pairing service: eight-digit codes, single use, expiry, kind mismatch refused, per-address lockout, global lockout deletes the live code, token extension near expiry, revocation ends the session.
 - Server tests for `/api/pair/info`, `/api/pair`, and `/desktop-sign-in/device`, including refusal over plain HTTP on a non-loopback host and the disconnected page.
+- Lockout tests behind a proxy: failures are counted per forwarded client address, and a forwarded-address header from anything other than the configured proxy is ignored.
 - Playwright coverage for the Paired computers rows and the code dialog.
 - The Tauri runtime test gains a picker case: short name resolution, probe over a stubbed port range, token storage, automatic sign-in, and return to the picker after revocation.
 - A manual pass on a fresh Linux VM with the installer, then pairing from a Mac on the same tailnet.
@@ -87,6 +103,7 @@ Do not move the remote window to an injected bearer header. The window is the se
 
 1. Server: `kind` column and migration, desktop codes, lockouts, `/api/pair/*`, device-bound session cookie, `pair-cli`, Settings UI. Ships alone; nothing changes for existing clients.
 2. Desktop: picker with peer discovery, name, code, and probe; identity-based connect if the header check passes; token storage; initialisation script; disconnected handling. Needs a desktop build, published through the existing preview workflow.
-3. Installer: the route question with the Caddy public path, random password instead of a prompt, Standard engine by default, final pairing code, `update.sh pair`. Docs in README, `docs/desktop.md`, and `docs/docker-stack.md`.
+3. Installer: the route question with the Caddy domain path and the Cloudflare Tunnel path, random password instead of a prompt, Standard engine by default, final pairing code, `update.sh pair`. Docs in README, `docs/desktop.md`, and `docs/docker-stack.md`.
+4. Installer: the public IP route, after a manual pass on a fresh VPS confirms Caddy obtains and renews a `shortlived` IP certificate.
 
 Open questions for the owner: whether the generated password should be printed at install time or only on request, and whether one year is the right token lifetime for a personal server.
