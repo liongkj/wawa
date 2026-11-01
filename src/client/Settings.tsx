@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from 'react';
 
 import {
   Check,
-  ChevronRight,
   Eye,
   EyeOff,
   KeyRound,
@@ -15,10 +14,8 @@ import {
   Save,
   Server,
   ShieldCheck,
-  Sparkles,
   Volume2,
   X,
-  Zap,
 } from 'lucide-react';
 import { z } from 'zod';
 import {
@@ -41,6 +38,7 @@ import { WorkspaceTransfer } from './settings/WorkspaceTransfer.js';
 import { ProfileCard } from './settings/ProfileCard.js';
 import { ChatDialog, type DiscoveredEntry } from './settings/ChatDialog.js';
 import { ModelDialog } from './settings/ModelDialog.js';
+import { Callout, Pill, SettingsGroup, SettingsRow, StatusDot } from './settings/primitives.js';
 
 type Props = {
   section: SettingsSection;
@@ -134,24 +132,29 @@ export function SettingsPanel({
   }
   function credential(id: string, label: string) {
     const exists = config.configuredSecrets.includes(id) && !remove.includes(id);
+    const shown = shownSecrets.has(id);
     return (
-      <div className="field credential-field">
-        <label htmlFor={'secret-' + id}>
-          {label}
-          {exists && (
-            <span className="saved-key">
-              <ShieldCheck size={11} /> Saved securely
-            </span>
-          )}
-        </label>
+      <SettingsRow
+        title={label}
+        htmlFor={'secret-' + id}
+        description={
+          remove.includes(id) ? (
+            <span className="danger-text">Key will be removed when you save.</span>
+          ) : exists ? (
+            <>
+              <ShieldCheck size={11} /> Saved securely · leave blank to keep
+            </>
+          ) : undefined
+        }
+      >
         <div className="secret-input">
           <KeyRound size={14} />
           <input
             id={'secret-' + id}
-            type={shownSecrets.has(id) ? 'text' : 'password'}
+            type={shown ? 'text' : 'password'}
             autoComplete="new-password"
             value={secrets[id] ?? ''}
-            placeholder={exists ? '•••••••••••• · leave blank to keep' : 'Paste a key…'}
+            placeholder={exists ? '••••••••••••' : 'Paste a key…'}
             onChange={(e) => {
               setSecrets({ ...secrets, [id]: e.target.value });
               setRemove(remove.filter((key) => key !== id));
@@ -160,8 +163,8 @@ export function SettingsPanel({
           <button
             type="button"
             className="icon-btn"
-            aria-label={shownSecrets.has(id) ? `Hide ${label}` : `Show ${label}`}
-            aria-pressed={shownSecrets.has(id)}
+            aria-label={shown ? `Hide ${label}` : `Show ${label}`}
+            aria-pressed={shown}
             onClick={() =>
               setShownSecrets((current) => {
                 const next = new Set(current);
@@ -171,7 +174,7 @@ export function SettingsPanel({
               })
             }
           >
-            {shownSecrets.has(id) ? <EyeOff size={14} /> : <Eye size={14} />}
+            {shown ? <EyeOff size={14} /> : <Eye size={14} />}
           </button>
         </div>
         {exists && (
@@ -185,10 +188,7 @@ export function SettingsPanel({
             Remove saved key
           </button>
         )}
-        {remove.includes(id) && (
-          <small className="danger-text">Key will be removed when you save.</small>
-        )}
-      </div>
+      </SettingsRow>
     );
   }
   async function discover(session?: string) {
@@ -309,6 +309,21 @@ export function SettingsPanel({
       onDirty?.(false);
     };
   }, [hasChanges, onDirty]);
+  const whatsappTone =
+    whatsapp?.status === 'ready'
+      ? 'ok'
+      : whatsapp && ['failed', 'disconnected', 'action_required'].includes(whatsapp.status)
+        ? 'warning'
+        : 'muted';
+  const whatsappText =
+    whatsapp?.status === 'ready'
+      ? 'Connected'
+      : whatsappTone === 'warning'
+        ? 'Not connected · try linking again'
+        : linkingWhatsapp || whatsapp?.qr
+          ? 'Waiting for your phone'
+          : 'Not linked yet';
+  const localServer = desktop && config.settings.desktopGateway.activeMode === 'local';
   return (
     <div className="settings-page" ref={page}>
       <div className="settings-page-heading">
@@ -316,6 +331,11 @@ export function SettingsPanel({
           <h1>{sectionCopy[section].title}</h1>
           <p className="page-description">{sectionCopy[section].description}</p>
         </div>
+        {section === 'models' && (
+          <button className="button secondary" onClick={() => setAddingModel(true)}>
+            <Plus size={14} /> Add connection
+          </button>
+        )}
         {savesSettings && (
           <button
             className="button primary"
@@ -334,93 +354,90 @@ export function SettingsPanel({
       )}
       {section === 'conversations' && (
         <>
-          <section className="settings-card">
-            <div className="card-title">
-              <span className="card-icon green">
-                <MessageSquare size={20} />
-              </span>
-              <div>
-                <h2>WhatsApp server</h2>
-                <p>
-                  {desktop
-                    ? 'Choose where your WhatsApp connection runs.'
-                    : 'Your WhatsApp session, connected to your own server.'}
-                </p>
-              </div>
-              <span className="label">No chat replies</span>
-            </div>
+          <SettingsGroup
+            title="Server"
+            description={
+              desktop
+                ? 'Where your WhatsApp connection runs. Wawa never sends a reply to WhatsApp.'
+                : 'Your WhatsApp session, connected to your own OpenWA server.'
+            }
+            note={
+              desktop ? (
+                <>
+                  Your tasks stay here. Each connection keeps its own WhatsApp session and followed
+                  chats; switching does not move or sign out a session. Unofficial connections can
+                  lead to account restrictions.
+                  {draft.desktopGateway.mode === 'remote' &&
+                    ' This workspace still pauses when this computer sleeps. To keep processing, switch to an always-on workspace under Workspaces.'}
+                </>
+              ) : (
+                'Keys stay on your server and are never sent back to this browser.'
+              )
+            }
+          >
             {desktop ? (
               <>
-                <div className="gateway-options">
-                  {(
-                    [
-                      ['local', 'This computer', 'Wawa runs its own WhatsApp server here.'],
-                      [
-                        'remote',
-                        'Another server',
-                        'Use an existing OpenWA server, such as Legion.',
-                      ],
-                    ] as const
-                  ).map(([mode, label, description]) => (
-                    <label
-                      className={`gateway-option ${draft.desktopGateway.mode === mode ? 'selected' : ''}`}
-                      key={mode}
-                    >
-                      <input
-                        type="radio"
-                        name="gateway-mode"
-                        value={mode}
-                        checked={draft.desktopGateway.mode === mode}
-                        onChange={() =>
-                          setDraft({ ...draft, desktopGateway: { ...draft.desktopGateway, mode } })
-                        }
-                      />
-                      <span>
-                        <strong>{label}</strong>
-                        <small>{description}</small>
-                      </span>
-                    </label>
-                  ))}
-                </div>
+                <SettingsRow
+                  title="Runs on"
+                  htmlFor="gateway-mode"
+                  description={
+                    draft.desktopGateway.mode === 'local'
+                      ? 'Wawa runs its own WhatsApp server on this computer.'
+                      : 'Use an existing OpenWA server, such as Legion.'
+                  }
+                >
+                  <select
+                    id="gateway-mode"
+                    value={draft.desktopGateway.mode}
+                    onChange={(e) =>
+                      setDraft({
+                        ...draft,
+                        desktopGateway: {
+                          ...draft.desktopGateway,
+                          mode: e.target.value === 'remote' ? 'remote' : 'local',
+                        },
+                      })
+                    }
+                  >
+                    <option value="local">This computer</option>
+                    <option value="remote">Another server</option>
+                  </select>
+                </SettingsRow>
                 {draft.desktopGateway.mode === 'local' && (
-                  <div className="gateway-options" aria-label="WhatsApp connection type">
-                    {(
-                      [
-                        ['whatsapp-web.js', 'Standard', 'Uses a browser in the background.'],
-                        [
-                          'baileys',
-                          'Lightweight · experimental',
-                          'No browser; tested offline only. Account restriction risk may be higher.',
-                        ],
-                      ] as const
-                    ).map(([engine, label, description]) => (
-                      <label
-                        className={`gateway-option ${draft.desktopGateway.engine === engine ? 'selected' : ''}`}
-                        key={engine}
-                      >
-                        <input
-                          type="radio"
-                          name="gateway-engine"
-                          checked={draft.desktopGateway.engine === engine}
-                          onChange={() =>
-                            setDraft({
-                              ...draft,
-                              desktopGateway: { ...draft.desktopGateway, engine },
-                            })
-                          }
-                        />
-                        <span>
-                          <strong>{label}</strong>
-                          <small>{description}</small>
-                        </span>
-                      </label>
-                    ))}
-                  </div>
+                  <SettingsRow
+                    title="Connection type"
+                    htmlFor="gateway-engine"
+                    description={
+                      draft.desktopGateway.engine === 'baileys'
+                        ? 'No browser; tested offline only. Account restriction risk may be higher.'
+                        : 'Uses a browser in the background.'
+                    }
+                  >
+                    <select
+                      id="gateway-engine"
+                      value={draft.desktopGateway.engine}
+                      onChange={(e) =>
+                        setDraft({
+                          ...draft,
+                          desktopGateway: {
+                            ...draft.desktopGateway,
+                            engine: e.target.value === 'baileys' ? 'baileys' : 'whatsapp-web.js',
+                          },
+                        })
+                      }
+                    >
+                      <option value="whatsapp-web.js">Standard</option>
+                      <option value="baileys">Lightweight · experimental</option>
+                    </select>
+                  </SettingsRow>
                 )}
                 {draft.desktopGateway.mode === 'remote' && (
-                  <div className="form-grid gateway-details">
-                    <div className="field">
-                      <label htmlFor="remote-openwa-url">Server address</label>
+                  <>
+                    <SettingsRow
+                      title="Server address"
+                      htmlFor="remote-openwa-url"
+                      description="The OpenWA address reachable from this computer."
+                    >
                       <input
                         id="remote-openwa-url"
                         placeholder="https://your-server.example"
@@ -432,102 +449,91 @@ export function SettingsPanel({
                           })
                         }
                       />
-                      <small>Use the OpenWA address reachable from this computer.</small>
-                    </div>
+                    </SettingsRow>
                     {credential('remote-openwa', 'Server API key')}
-                  </div>
-                )}
-                <p className="gateway-note">
-                  Your tasks stay here. Each connection keeps its own WhatsApp session and followed
-                  chats; switching does not move or sign out a session. Unofficial connections can
-                  lead to account restrictions.
-                </p>
-                {draft.desktopGateway.mode === 'remote' && (
-                  <p className="gateway-note">
-                    This workspace still pauses when this computer sleeps. To keep processing,
-                    switch to an always-on workspace under Workspaces.
-                  </p>
+                  </>
                 )}
                 {gatewayPending && (
-                  <p className="gateway-restart" role="status">
-                    {config.desktopGatewayRestartRequired && !hasChanges
-                      ? 'Restart Wawa to use the saved connection.'
-                      : 'Save your changes, then restart Wawa to use this connection.'}
-                    {config.desktopGatewayRestartRequired &&
-                      !hasChanges &&
-                      window.chat2tasksDesktop && (
-                        <button
-                          className="text-button"
-                          onClick={() => void window.chat2tasksDesktop?.restart()}
-                        >
-                          Restart Wawa
-                        </button>
-                      )}
-                  </p>
+                  <div className="settings-row">
+                    <p className="gateway-restart" role="status">
+                      {config.desktopGatewayRestartRequired && !hasChanges
+                        ? 'Restart Wawa to use the saved connection.'
+                        : 'Save your changes, then restart Wawa to use this connection.'}
+                      {config.desktopGatewayRestartRequired &&
+                        !hasChanges &&
+                        window.chat2tasksDesktop && (
+                          <button
+                            className="text-button"
+                            onClick={() => void window.chat2tasksDesktop?.restart()}
+                          >
+                            Restart Wawa
+                          </button>
+                        )}
+                    </p>
+                  </div>
+                )}
+                {localServer && !gatewayPending && (
+                  <SettingsRow
+                    title="WhatsApp"
+                    description={<StatusDot tone={whatsappTone}>{whatsappText}</StatusDot>}
+                  >
+                    {whatsapp?.status !== 'ready' && (
+                      <button
+                        className="button secondary"
+                        disabled={linkingWhatsapp}
+                        onClick={() => {
+                          setLinkingWhatsapp(true);
+                          void api('desktop/whatsapp/start', z.object({ status: z.string() }), {})
+                            .then(() => api('desktop/whatsapp/status', WhatsappStatus))
+                            .then(setWhatsapp)
+                            .catch((error) => {
+                              setLinkingWhatsapp(false);
+                              notify(errorMessage(error));
+                            });
+                        }}
+                      >
+                        {linkingWhatsapp ? 'Preparing connection…' : 'Link WhatsApp'}
+                      </button>
+                    )}
+                  </SettingsRow>
+                )}
+                {desktop && !gatewayPending && whatsapp?.qr && (
+                  <div className="settings-row stacked">
+                    <div className="onboarding-qr">
+                      <img src={whatsapp.qr} alt="WhatsApp pairing QR code" />
+                      <p>
+                        On your phone, open WhatsApp → Linked devices → Link a device, then scan
+                        this code.
+                      </p>
+                    </div>
+                  </div>
                 )}
               </>
             ) : (
-              <div className="form-grid">
-                <div className="field">
-                  <label htmlFor="openwa-url">OpenWA API URL</label>
+              <>
+                <SettingsRow
+                  title="OpenWA API URL"
+                  htmlFor="openwa-url"
+                  description="The address reachable from this Docker container."
+                >
                   <input
                     id="openwa-url"
                     placeholder="http://openwa-api:2785"
                     value={draft.openwaUrl}
                     onChange={(e) => setDraft({ ...draft, openwaUrl: e.target.value })}
                   />
-                  <small>
-                    {window.chat2tasksDesktop || window.chat2tasksTauri
-                      ? 'This local address is managed by Wawa.'
-                      : 'Use the address reachable from this Docker container.'}
-                  </small>
-                </div>
+                </SettingsRow>
                 {credential('openwa', 'OpenWA API key')}
-              </div>
+              </>
             )}
-            {desktop &&
-              !gatewayPending &&
-              whatsapp &&
-              ['failed', 'disconnected', 'action_required'].includes(whatsapp.status) && (
-                <p className="gateway-note" role="status">
-                  WhatsApp is not connected. Try linking it again.
-                </p>
-              )}
-            {desktop && !gatewayPending && whatsapp?.qr && (
-              <div className="onboarding-qr">
-                <img src={whatsapp.qr} alt="WhatsApp pairing QR code" />
-                <p>
-                  On your phone, open WhatsApp → Linked devices → Link a device, then scan this
-                  code.
-                </p>
-              </div>
-            )}
-            <div className="card-footer">
-              <span>
-                <ShieldCheck size={13} />{' '}
-                {desktop ? 'Keys stay on this computer.' : 'Keys stay on your server.'}
-              </span>
-              {desktop &&
-                !gatewayPending &&
-                config.settings.desktopGateway.activeMode === 'local' &&
-                whatsapp?.status !== 'ready' && (
-                  <button
-                    className="button secondary"
-                    disabled={linkingWhatsapp}
-                    onClick={() => {
-                      setLinkingWhatsapp(true);
-                      void api('desktop/whatsapp/start', z.object({ status: z.string() }), {})
-                        .then(() => api('desktop/whatsapp/status', WhatsappStatus))
-                        .then(setWhatsapp)
-                        .catch((error) => {
-                          setLinkingWhatsapp(false);
-                          notify(errorMessage(error));
-                        });
-                    }}
-                  >
-                    {linkingWhatsapp ? 'Preparing connection…' : 'Link WhatsApp'}
-                  </button>
-                )}
+            <SettingsRow
+              title="Sessions"
+              description={
+                sessions.length
+                  ? `${sessions.length} session${sessions.length === 1 ? '' : 's'} found on this server.`
+                  : 'Look up the WhatsApp sessions this server knows about.'
+              }
+            >
               <button
                 className="button secondary"
                 disabled={Boolean(discovering) || !draft.openwaUrl || gatewayPending}
@@ -540,23 +546,16 @@ export function SettingsPanel({
                 )}{' '}
                 {discovering === 'sessions' ? 'Finding sessions…' : 'Find sessions'}
               </button>
-            </div>
-          </section>
-          <section className="settings-card">
-            <div className="card-title">
-              <span className="card-icon">
-                <Radio size={20} />
-              </span>
-              <div>
-                <h2>
-                  Followed conversations <span className="label">{activeCount} active</span>
-                </h2>
-                <p>
-                  {gatewayPending
-                    ? 'These are the chats for your currently connected server.'
-                    : 'Only active chats are sent to your selected AI connection.'}
-                </p>
-              </div>
+            </SettingsRow>
+          </SettingsGroup>
+          <SettingsGroup
+            title="Followed conversations"
+            description={
+              gatewayPending
+                ? 'These are the chats for your currently connected server.'
+                : `${activeCount} of ${draft.chats.length} active. Only active chats are sent to your selected AI connection.`
+            }
+            action={
               <button
                 className="button secondary"
                 disabled={gatewayPending}
@@ -564,172 +563,180 @@ export function SettingsPanel({
               >
                 <Plus size={14} /> Add chat
               </button>
-            </div>
+            }
+          >
             {sessions.length > 0 && (
-              <div className="discovery-controls">
-                <div className="field">
-                  <label htmlFor="discover-session">WhatsApp session</label>
-                  <select
-                    id="discover-session"
-                    value={sessionId}
-                    onChange={(e) => setSessionId(e.target.value)}
-                  >
-                    <option value="">Choose a session…</option>
-                    {sessions.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+              <SettingsRow
+                title="Browse a session"
+                htmlFor="discover-session"
+                description="Pick a WhatsApp session, then list its chats."
+              >
+                <select
+                  id="discover-session"
+                  value={sessionId}
+                  onChange={(e) => setSessionId(e.target.value)}
+                >
+                  <option value="">Choose a session…</option>
+                  {sessions.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
                 <button
                   className="button secondary"
                   disabled={!sessionId || Boolean(discovering)}
                   onClick={() => void discover(sessionId)}
                 >
-                  {discovering === 'chats' ? 'Finding chats…' : 'Find chats'}{' '}
-                  <ChevronRight size={14} />
+                  {discovering === 'chats' ? 'Finding chats…' : 'Find chats'}
                 </button>
-              </div>
+              </SettingsRow>
             )}
-            {discovered?.sessionId === sessionId && discovered.chats.length > 0 && (
-              <div className="discovered-list">
-                {discovered.chats.map((c) => (
-                  <div className="discovered-row" key={c.id}>
+            {discovered?.sessionId === sessionId &&
+              discovered.chats.map((c) => {
+                const added = draft.chats.some(
+                  (chat) => chat.chatId === c.id && chat.sessionId === sessionId,
+                );
+                return (
+                  <div className="settings-row discovered-row" key={c.id}>
                     <MessageSquare size={15} />
-                    <span>{c.name}</span>
-                    <button
-                      className="text-button"
-                      disabled={draft.chats.some(
-                        (chat) => chat.chatId === c.id && chat.sessionId === sessionId,
-                      )}
-                      onClick={() => {
-                        setDraft({
-                          ...draft,
-                          chats: [
-                            ...draft.chats,
-                            {
-                              id: crypto.randomUUID(),
-                              name: c.name,
-                              sessionId,
-                              chatId: c.id,
-                              enabled: false,
-                            },
-                          ],
-                        });
-                        notify('Chat added as paused. Save changes, then activate it when ready.');
-                      }}
-                    >
-                      Add paused <Plus size={12} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            {draft.chats.length ? (
-              <div className="chat-activators">
-                {draft.chats.map((c) => (
-                  <div className="chat-activator" key={c.id}>
-                    <span className="conversation-avatar">{c.name.slice(0, 1)}</span>
-                    <div className="activator-info">
-                      <input
-                        className="activator-name"
-                        aria-label={`Conversation name: ${c.name}`}
-                        value={c.name}
-                        onChange={(e) =>
-                          setDraft({
-                            ...draft,
-                            chats: draft.chats.map((chat) =>
-                              chat.id === c.id ? { ...chat, name: e.target.value } : chat,
-                            ),
-                          })
-                        }
-                      />
-                      <p aria-live="polite">
-                        {pendingChat?.id === c.id
-                          ? pendingChat.action === 'pausing'
-                            ? 'Pausing…'
-                            : 'Resuming…'
-                          : c.enabled
-                            ? 'Following this conversation'
-                            : 'Paused · saved tasks remain available'}
-                      </p>
-                      <small>{c.chatId}</small>
+                    <div className="settings-row-text">
+                      <span className="settings-row-title">{c.name}</span>
+                      <p>{c.id}</p>
                     </div>
-                    <span className={`label ${c.enabled ? 'green-label' : ''}`}>
-                      {c.enabled ? 'Active' : 'Paused'}
-                    </span>
-                    <button
-                      className={`toggle ${c.enabled ? 'on' : ''}`}
-                      role="switch"
-                      aria-busy={pendingChat?.id === c.id}
-                      aria-checked={c.enabled}
-                      aria-label={`Activate ${c.name}`}
-                      disabled={saving || !config.settings.chats.some((chat) => chat.id === c.id)}
-                      onClick={() => void toggle(c)}
-                    >
-                      <span />
-                    </button>
-                    <button
-                      className="icon-btn danger-text"
-                      aria-label={`Remove ${c.name} from followed chats`}
-                      onClick={() =>
+                    <div className="settings-row-control">
+                      {added ? (
+                        <Pill>Added</Pill>
+                      ) : (
+                        <button
+                          className="text-button"
+                          onClick={() => {
+                            setDraft({
+                              ...draft,
+                              chats: [
+                                ...draft.chats,
+                                {
+                                  id: crypto.randomUUID(),
+                                  name: c.name,
+                                  sessionId,
+                                  chatId: c.id,
+                                  enabled: false,
+                                },
+                              ],
+                            });
+                            notify(
+                              'Chat added as paused. Save changes, then activate it when ready.',
+                            );
+                          }}
+                        >
+                          Add paused <Plus size={12} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            {draft.chats.length ? (
+              draft.chats.map((c) => (
+                <div className="settings-row chat-activator" key={c.id}>
+                  <span className="conversation-avatar">{c.name.slice(0, 1)}</span>
+                  <div className="settings-row-text activator-info">
+                    <input
+                      className="activator-name"
+                      aria-label={`Conversation name: ${c.name}`}
+                      value={c.name}
+                      onChange={(e) =>
                         setDraft({
                           ...draft,
-                          chats: draft.chats.filter((chat) => chat.id !== c.id),
+                          chats: draft.chats.map((chat) =>
+                            chat.id === c.id ? { ...chat, name: e.target.value } : chat,
+                          ),
                         })
                       }
-                    >
-                      <X size={15} />
-                    </button>
+                    />
+                    <p aria-live="polite">
+                      {pendingChat?.id === c.id
+                        ? pendingChat.action === 'pausing'
+                          ? 'Pausing…'
+                          : 'Resuming…'
+                        : c.enabled
+                          ? 'Following this conversation'
+                          : 'Paused · saved tasks remain available'}
+                      <span className="chat-id"> · {c.chatId}</span>
+                    </p>
                   </div>
-                ))}
-              </div>
+                  <Pill tone={c.enabled ? 'accent' : 'neutral'}>
+                    {c.enabled ? 'Active' : 'Paused'}
+                  </Pill>
+                  <button
+                    className={`toggle ${c.enabled ? 'on' : ''}`}
+                    role="switch"
+                    aria-busy={pendingChat?.id === c.id}
+                    aria-checked={c.enabled}
+                    aria-label={`Activate ${c.name}`}
+                    disabled={saving || !config.settings.chats.some((chat) => chat.id === c.id)}
+                    onClick={() => void toggle(c)}
+                  >
+                    <span />
+                  </button>
+                  <button
+                    className="icon-btn danger-text"
+                    aria-label={`Remove ${c.name} from followed chats`}
+                    onClick={() =>
+                      setDraft({
+                        ...draft,
+                        chats: draft.chats.filter((chat) => chat.id !== c.id),
+                      })
+                    }
+                  >
+                    <X size={15} />
+                  </button>
+                </div>
+              ))
             ) : (
-              <div className="settings-empty">
-                <MessageSquare size={26} />
-                <h3>A good place to start</h3>
-                <p>Add a conversation you want to follow. You control what’s active.</p>
+              <SettingsRow
+                title="No conversations yet"
+                description="Add a conversation you want to follow. You control what’s active."
+              >
                 <button className="button secondary" onClick={() => setAddingChat(true)}>
                   <Plus size={14} /> Add a conversation
                 </button>
-              </div>
+              </SettingsRow>
             )}
-          </section>
+          </SettingsGroup>
           {!desktop && (
-            <section className="settings-card">
-              <div className="card-title">
-                <span className="card-icon">
-                  <Radio size={20} />
-                </span>
-                <div>
-                  <h2>Live message delivery</h2>
-                  <p>OpenWA sends signed events when a message arrives, changes, or is sent.</p>
-                </div>
-                <span className="label">
-                  {config.webhook.registeredSessions ? 'Registered' : 'Not connected'}
-                </span>
-              </div>
-              <div className="field">
-                <label htmlFor="webhook-url">Webhook callback URL</label>
+            <SettingsGroup
+              title="Live message delivery"
+              description="OpenWA sends signed events when a message arrives, changes, or is sent."
+            >
+              <SettingsRow
+                title="Webhook callback URL"
+                htmlFor="webhook-url"
+                description="The address reachable from OpenWA. Private hosts must be allowed in OpenWA’s SSRF host allowlist."
+              >
                 <input
                   id="webhook-url"
                   value={draft.webhookUrl}
                   placeholder="http://chat2tasks:2786/api/webhooks/openwa"
                   onChange={(e) => setDraft({ ...draft, webhookUrl: e.target.value })}
                 />
-                <small>
-                  Use the address reachable from OpenWA. Private hosts must be explicitly allowed in
-                  OpenWA’s SSRF host allowlist.
-                </small>
-              </div>
-              <div className="card-footer">
-                <span>
-                  {config.webhook.lastReceivedAt
+              </SettingsRow>
+              <SettingsRow
+                title={
+                  <>
+                    Webhooks{' '}
+                    <Pill tone={config.webhook.registeredSessions ? 'accent' : 'neutral'}>
+                      {config.webhook.registeredSessions ? 'Registered' : 'Not connected'}
+                    </Pill>
+                  </>
+                }
+                description={
+                  config.webhook.lastReceivedAt
                     ? 'Last signed event: ' +
                       new Date(config.webhook.lastReceivedAt * 1000).toLocaleString()
-                    : 'No signed event received yet'}
-                </span>
+                    : 'No signed event received yet.'
+                }
+              >
                 <button
                   className="button secondary"
                   disabled={saving || !draft.webhookUrl || !draft.chats.length}
@@ -749,16 +756,13 @@ export function SettingsPanel({
                 >
                   <Radio size={14} /> Connect & test webhooks
                 </button>
-              </div>
-            </section>
+              </SettingsRow>
+            </SettingsGroup>
           )}
-          <div className="privacy-strip">
-            <ShieldCheck size={18} />
-            <p>
-              Pausing a chat stops new AI processing. Existing tasks, ticks, notes, and cached
-              messages stay available. Wawa never sends a reply to WhatsApp.
-            </p>
-          </div>
+          <Callout>
+            Pausing a chat stops new AI processing. Existing tasks, ticks, notes, and cached
+            messages stay available. Wawa never sends a reply to WhatsApp.
+          </Callout>
           <ChatDialog
             open={addingChat}
             onClose={() => {
@@ -784,177 +788,77 @@ export function SettingsPanel({
       )}
       {section === 'models' && (
         <>
-          <section className="settings-card connection-explainer">
-            <div className="card-title">
-              <span className="card-icon">
-                <Sparkles size={20} />
-              </span>
+          <section className="settings-group">
+            <div className="settings-group-heading">
               <div>
-                <h2>Model connections</h2>
-                <p>Use Codex, an OpenAI-compatible API, or a Cloudflare AI Gateway.</p>
-              </div>
-              <button className="button secondary" onClick={() => setAddingModel(true)}>
-                <Plus size={14} /> Add connection
-              </button>
-            </div>
-          </section>
-          {draft.profiles.map((profile) => (
-            <ProfileCard
-              key={profile.id}
-              profile={profile}
-              active={draft.activeProfileId === profile.id}
-              onActivate={() => {
-                if (profile.kind !== 'decision')
-                  setDraft({ ...draft, activeProfileId: profile.id });
-              }}
-              onChange={(updated) =>
-                setDraft({
-                  ...draft,
-                  profiles: draft.profiles.map((p) => (p.id === updated.id ? updated : p)),
-                })
-              }
-              onRemove={() => {
-                if (draft.profiles.length === 1) return;
-                const profiles = draft.profiles.filter((p) => p.id !== profile.id);
-                const first = profiles.find((p) => p.kind !== 'decision');
-                if (first)
-                  setDraft({
-                    ...draft,
-                    profiles,
-                    trigger:
-                      draft.trigger.decisionProfileId === profile.id
-                        ? { ...draft.trigger, decisionProfileId: null }
-                        : draft.trigger,
-                    activeProfileId:
-                      draft.activeProfileId === profile.id ? first.id : draft.activeProfileId,
-                  });
-              }}
-              canRemove={
-                profile.kind === 'decision' ||
-                draft.profiles.filter((p) => p.kind !== 'decision').length > 1
-              }
-              credential={credential}
-              onTest={async () => {
-                if (await save()) {
-                  await api('test-model', OkSchema, { profileId: profile.id });
-                  notify('Connection works. This test used one small AI request.');
-                }
-              }}
-              onModels={async () => {
-                if (!(await save())) return [];
-                const result = await api(
-                  'models',
-                  z.object({ models: z.array(z.string()), error: z.string().optional() }),
-                  { profileId: profile.id },
-                );
-                if (result.error) notify(result.error, 'error');
-                return result.models;
-              }}
-              notify={notify}
-            />
-          ))}
-        </>
-      )}
-      {section === 'automation' && (
-        <section className="settings-card">
-          <div className="card-title">
-            <span className="card-icon">
-              <Zap size={20} />
-            </span>
-            <div>
-              <h2>Give conversations a little room</h2>
-              <p>Wait for a quiet moment before turning a burst of messages into tasks.</p>
-            </div>
-          </div>
-          <div className="form-grid">
-            <div className="field full-width">
-              <label htmlFor="trigger-mode">When to run task analysis</label>
-              <select
-                id="trigger-mode"
-                value={draft.trigger.mode}
-                onChange={(e) =>
-                  setDraft({
-                    ...draft,
-                    trigger:
-                      e.target.value === 'manual'
-                        ? {
-                            mode: 'manual',
-                            decisionProfileId: draft.trigger.decisionProfileId ?? null,
-                          }
-                        : {
-                            mode: 'automatic',
-                            decisionProfileId: draft.trigger.decisionProfileId ?? null,
-                          },
-                  })
-                }
-              >
-                <option value="automatic">Automatically · debounce, then decide</option>
-                <option value="manual">Only when I choose Run now</option>
-              </select>
-            </div>
-            <div className="field full-width">
-              <label htmlFor="decision-connection">Decision connection</label>
-              <select
-                id="decision-connection"
-                value={draft.trigger.decisionProfileId ?? ''}
-                onChange={(e) =>
-                  setDraft({
-                    ...draft,
-                    trigger: { ...draft.trigger, decisionProfileId: e.target.value || null },
-                  })
-                }
-              >
-                <option value="">Use the task model for reviews</option>
-                {draft.profiles.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} · {p.model}
-                  </option>
-                ))}
-              </select>
-              <small>
-                OpenAI Decisions, Jev, Codex, or another configured connection. This connection
-                reviews item categories and proposed completions. In automatic mode it also decides
-                when to run. Uncertain results keep work visible or ask for confirmation.
-              </small>
-            </div>
-            <div className="field">
-              <label>Message delivery</label>
-              <div className="codex-hint">
-                <Radio size={16} />
+                <h2>Connections</h2>
                 <p>
-                  {desktop
-                    ? 'New messages trigger work as they arrive.'
-                    : 'OpenWA webhooks trigger work as messages arrive; no periodic message polling.'}
+                  Codex, an OpenAI-compatible API, or a Cloudflare AI Gateway. Conversations go only
+                  to the connection in use.
                 </p>
               </div>
             </div>
-            <div className="field">
-              <label htmlFor="quiet">Wait for a quiet period of</label>
-              <select
-                id="quiet"
-                value={draft.quietSeconds}
-                onChange={(e) => setDraft({ ...draft, quietSeconds: Number(e.target.value) })}
-              >
-                {[0, 15, 30, 45, 60, 120].map((v) => (
-                  <option key={v} value={v}>
-                    {v ? `${v} seconds` : 'Process immediately'}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-        </section>
-      )}
-      {section === 'models' && (
-        <>
-          <div className="privacy-strip">
-            <ShieldCheck size={18} />
-            <p>
-              {window.chat2tasksDesktop || window.chat2tasksTauri
-                ? 'API keys are encrypted on this computer and are not shown after saving. Conversations go only to your selected model connection. Use Workspaces to create an encrypted backup.'
-                : 'API keys are encrypted on your server and never sent back to this browser. Conversations go only to your selected model connection. Keep the data volume and its vault key backed up together.'}
-            </p>
-          </div>
+            {draft.profiles.map((profile) => (
+              <ProfileCard
+                key={profile.id}
+                profile={profile}
+                active={draft.activeProfileId === profile.id}
+                onActivate={() => {
+                  if (profile.kind !== 'decision')
+                    setDraft({ ...draft, activeProfileId: profile.id });
+                }}
+                onChange={(updated) =>
+                  setDraft({
+                    ...draft,
+                    profiles: draft.profiles.map((p) => (p.id === updated.id ? updated : p)),
+                  })
+                }
+                onRemove={() => {
+                  if (draft.profiles.length === 1) return;
+                  const profiles = draft.profiles.filter((p) => p.id !== profile.id);
+                  const first = profiles.find((p) => p.kind !== 'decision');
+                  if (first)
+                    setDraft({
+                      ...draft,
+                      profiles,
+                      trigger:
+                        draft.trigger.decisionProfileId === profile.id
+                          ? { ...draft.trigger, decisionProfileId: null }
+                          : draft.trigger,
+                      activeProfileId:
+                        draft.activeProfileId === profile.id ? first.id : draft.activeProfileId,
+                    });
+                }}
+                canRemove={
+                  profile.kind === 'decision' ||
+                  draft.profiles.filter((p) => p.kind !== 'decision').length > 1
+                }
+                credential={credential}
+                onTest={async () => {
+                  if (await save()) {
+                    await api('test-model', OkSchema, { profileId: profile.id });
+                    notify('Connection works. This test used one small AI request.');
+                  }
+                }}
+                onModels={async () => {
+                  if (!(await save())) return [];
+                  const result = await api(
+                    'models',
+                    z.object({ models: z.array(z.string()), error: z.string().optional() }),
+                    { profileId: profile.id },
+                  );
+                  if (result.error) notify(result.error, 'error');
+                  return result.models;
+                }}
+                notify={notify}
+              />
+            ))}
+          </section>
+          <Callout>
+            {window.chat2tasksDesktop || window.chat2tasksTauri
+              ? 'API keys are encrypted on this computer and are not shown after saving. Use Workspaces to create an encrypted backup.'
+              : 'API keys are encrypted on your server and never sent back to this browser. Keep the data volume and its vault key backed up together.'}
+          </Callout>
           <ModelDialog
             open={addingModel}
             onClose={() => setAddingModel(false)}
@@ -965,6 +869,81 @@ export function SettingsPanel({
             }}
           />
         </>
+      )}
+      {section === 'automation' && (
+        <SettingsGroup
+          title="Task analysis"
+          description="Wait for a quiet moment before turning a burst of messages into tasks."
+        >
+          <SettingsRow title="When to run" htmlFor="trigger-mode">
+            <select
+              id="trigger-mode"
+              value={draft.trigger.mode}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  trigger:
+                    e.target.value === 'manual'
+                      ? {
+                          mode: 'manual',
+                          decisionProfileId: draft.trigger.decisionProfileId ?? null,
+                        }
+                      : {
+                          mode: 'automatic',
+                          decisionProfileId: draft.trigger.decisionProfileId ?? null,
+                        },
+                })
+              }
+            >
+              <option value="automatic">Automatically · debounce, then decide</option>
+              <option value="manual">Only when I choose Run now</option>
+            </select>
+          </SettingsRow>
+          <SettingsRow
+            title="Decision connection"
+            htmlFor="decision-connection"
+            description="Reviews item categories and proposed completions. In automatic mode it also decides when to run. Uncertain results keep work visible or ask for confirmation."
+          >
+            <select
+              id="decision-connection"
+              value={draft.trigger.decisionProfileId ?? ''}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  trigger: { ...draft.trigger, decisionProfileId: e.target.value || null },
+                })
+              }
+            >
+              <option value="">Use the task model for reviews</option>
+              {draft.profiles.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} · {p.model}
+                </option>
+              ))}
+            </select>
+          </SettingsRow>
+          <SettingsRow title="Wait for a quiet period of" htmlFor="quiet">
+            <select
+              id="quiet"
+              value={draft.quietSeconds}
+              onChange={(e) => setDraft({ ...draft, quietSeconds: Number(e.target.value) })}
+            >
+              {[0, 15, 30, 45, 60, 120].map((v) => (
+                <option key={v} value={v}>
+                  {v ? `${v} seconds` : 'Process immediately'}
+                </option>
+              ))}
+            </select>
+          </SettingsRow>
+          <SettingsRow
+            title="Message delivery"
+            description={
+              desktop
+                ? 'New messages trigger work as they arrive.'
+                : 'OpenWA webhooks trigger work as messages arrive; no periodic message polling.'
+            }
+          />
+        </SettingsGroup>
       )}
       <div hidden={section !== 'browser'}>
         <CompanionSettings notify={notify} />

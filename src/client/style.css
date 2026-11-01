@@ -1586,6 +1586,7 @@ html[data-input='pointer'] .question-arrived {
   flex-direction: row;
   min-height: 0;
   flex: 1;
+  background: var(--sidebar);
 }
 .settings-navigation {
   display: flex;
@@ -1593,9 +1594,10 @@ html[data-input='pointer'] .question-arrived {
   flex-direction: column;
   align-items: stretch;
   gap: 4px;
-  padding: 30px 12px 24px 18px;
+  padding: 28px 12px 24px 18px;
   border-right: 1px solid var(--line);
   overflow-y: auto;
+  background: var(--surface);
 }
 .settings-navigation button {
   padding: 10px 12px;
@@ -1609,12 +1611,15 @@ html[data-input='pointer'] .question-arrived {
   background: var(--hover);
   font-weight: 600;
 }
+.settings-navigation button:hover {
+  color: var(--text);
+}
 .settings-page h1 {
   font-family: var(--title);
-  font-weight: 500;
+  font-weight: 600;
 }
 .settings-page .page-description {
-  font-size: 14px;
+  font-size: 13px;
 }
 .settings-card {
   background: var(--surface);
@@ -2057,7 +2062,20 @@ html[data-input='pointer'] .navigation-popup:is([data-starting-style], [data-end
     gap: 18px;
   }
   .settings-page h1 {
-    font-size: 29px;
+    font-size: 20px;
+  }
+  .settings-row {
+    flex-wrap: wrap;
+  }
+  .settings-row-control {
+    max-width: none;
+    flex-basis: 100%;
+    justify-content: flex-start;
+  }
+  .settings-row-control > input,
+  .settings-row-control > select,
+  .settings-row-control > .secret-input {
+    width: 100%;
   }
   .settings-card {
     padding: 20px;
