@@ -68,6 +68,7 @@ services:
       DESKTOP_GATEWAY_ENGINE: ${WAWA_ENGINE:?Choose a WhatsApp connection}
       PUBLIC_ORIGIN: ${WAWA_ORIGIN:?Set the private HTTPS address}
       APP_PASSWORD:
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
     volumes:
       - workspace-data:/app/data
       - codex-home:/home/node/.codex
@@ -78,8 +79,78 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  # Public route with a domain: certificates from Let's Encrypt, then proxy to Wawa.
+  caddy:
+    image: caddy:2
+    profiles: [domain]
+    restart: unless-stopped
+    command: ['caddy', 'reverse-proxy', '--from', '${WAWA_DOMAIN:-}', '--to', 'wawa:2786']
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - wawa
+    security_opt:
+      - no-new-privileges:true
+
+  # Tailscale at your own domain: the domain is a CNAME to this server's tailnet name, so only
+  # the tailnet can reach it. Caddy proves the domain over Cloudflare DNS, which needs the
+  # Cloudflare DNS plugin, and Tailscale Serve passes TLS through to it on loopback.
+  caddy-tailnet:
+    image: wawa-caddy-cloudflare:local
+    build:
+      dockerfile_inline: |
+        FROM caddy:2-builder AS builder
+        RUN xcaddy build --with github.com/caddy-dns/cloudflare
+        FROM caddy:2
+        COPY --from=builder /usr/bin/caddy /usr/bin/caddy
+    profiles: [tailscale-domain]
+    restart: unless-stopped
+    environment:
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+    configs:
+      - source: caddy-tailnet
+        target: /etc/caddy/Caddyfile
+    ports:
+      - '127.0.0.1:${WAWA_TLS_PORT:-0}:443'
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - wawa
+    security_opt:
+      - no-new-privileges:true
+
+  # Cloudflare Tunnel: dials out to Cloudflare, so no port forwarding is needed.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: [cloudflare]
+    restart: unless-stopped
+    command: ['tunnel', '--no-autoupdate', 'run']
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      - wawa
+    security_opt:
+      - no-new-privileges:true
+
+configs:
+  caddy-tailnet:
+    content: |
+      ${WAWA_DOMAIN:-localhost} {
+        tls {
+          dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+        }
+        reverse_proxy wawa:2786
+      }
+
 volumes:
   openwa-data:
   gateway-key:
   workspace-data:
   codex-home:
+  caddy-data:
+  caddy-config:

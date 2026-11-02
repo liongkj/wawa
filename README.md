@@ -24,7 +24,7 @@ Run this on a Linux server you manage:
 curl -fsSL https://raw.githubusercontent.com/liongkj/wawa/main/scripts/install-server.sh | bash
 ```
 
-The installer offers to set up Docker and Tailscale if needed, starts a new Wawa workspace and WhatsApp gateway, and connects them privately. It asks you to choose a workspace password and gives you an address to enter in the Mac app. Then link WhatsApp, choose your conversations, and sign in to Codex. The server must stay awake and connected to the internet. It runs the prebuilt image published from this repository and checks for updates every night; you remain responsible for backups. This is not a hosted service. See the [server setup guide](docs/docker-stack.md).
+The installer asks how your computers should reach the server (privately through Tailscale, optionally at your own domain, publicly through a domain you own, or through Cloudflare Tunnel), sets up what that needs, and starts a new Wawa workspace and WhatsApp gateway. It ends with a short pairing code: in the Mac app, choose Use another computer, pick the server, and enter the code. Then link WhatsApp, choose your conversations, and sign in to Codex. The server must stay awake and connected to the internet. It runs the prebuilt image published from this repository and checks for updates every night; you remain responsible for backups. This is not a hosted service. See the [server setup guide](docs/docker-stack.md).
 
 The installer creates a new workspace. To use an existing server workspace, connect the desktop app to that server instead; the installer does not move or replace an existing WhatsApp session.
 
