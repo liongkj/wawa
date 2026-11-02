@@ -1,6 +1,57 @@
 use serde::{Deserialize, Serialize};
-use std::{fs, path::Path};
+use std::{fs, io::Write, path::Path};
 use tauri::Url;
+
+const DEVICE_TOKEN_FILE: &str = "device-token.json";
+
+/// A paired computer's token for one server. Kept apart from the workspace choice, readable
+/// only by this user, and never handed to the app's own windows.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct DeviceToken {
+    pub origin: String,
+    pub token: String,
+}
+
+pub fn origin_of(address: &str) -> Option<String> {
+    Url::parse(address)
+        .ok()
+        .map(|url| url.origin().ascii_serialization())
+}
+
+/// The saved token, only when it belongs to `origin`.
+pub fn read_device_token(data: &Path, origin: &str) -> Option<String> {
+    let contents = fs::read_to_string(data.join(DEVICE_TOKEN_FILE)).ok()?;
+    let saved: DeviceToken = serde_json::from_str(&contents).ok()?;
+    (saved.origin == origin && saved.token.starts_with("c2t_")).then_some(saved.token)
+}
+
+pub fn save_device_token(data: &Path, device: &DeviceToken) -> Result<(), String> {
+    let error = || "Could not save this computer's pairing.".to_string();
+    if origin_of(&device.origin).as_deref() != Some(device.origin.as_str())
+        || !device.token.starts_with("c2t_")
+    {
+        return Err(error());
+    }
+    fs::create_dir_all(data).map_err(|_| error())?;
+    let temporary = data.join(format!("{DEVICE_TOKEN_FILE}.tmp"));
+    let _ = fs::remove_file(&temporary);
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temporary).map_err(|_| error())?;
+    let bytes = serde_json::to_vec(device).map_err(|_| error())?;
+    file.write_all(&bytes).map_err(|_| error())?;
+    file.sync_all().map_err(|_| error())?;
+    fs::rename(&temporary, data.join(DEVICE_TOKEN_FILE)).map_err(|_| error())
+}
+
+pub fn clear_device_token(data: &Path) {
+    let _ = fs::remove_file(data.join(DEVICE_TOKEN_FILE));
+}
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
@@ -132,6 +183,84 @@ mod tests {
             "local workspace"
         );
         fs::remove_dir_all(data).unwrap();
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("chat2tasks-{name}-{}-{id}", std::process::id()))
+    }
+
+    #[test]
+    fn a_device_token_is_kept_privately_and_only_given_to_its_server() {
+        let data = scratch("device-token");
+        let origin = origin_of("https://wa-service.tail.ts.net:8443/").unwrap();
+        assert_eq!(origin, "https://wa-service.tail.ts.net:8443");
+        assert_eq!(read_device_token(&data, &origin), None);
+        save_device_token(
+            &data,
+            &DeviceToken {
+                origin: origin.clone(),
+                token: "c2t_first".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            read_device_token(&data, &origin).as_deref(),
+            Some("c2t_first")
+        );
+        assert_eq!(
+            read_device_token(&data, "https://wa-service.tail.ts.net"),
+            None
+        );
+        assert_eq!(read_device_token(&data, "https://evil.example"), None);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(data.join(DEVICE_TOKEN_FILE))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        save_device_token(
+            &data,
+            &DeviceToken {
+                origin: origin.clone(),
+                token: "c2t_second".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            read_device_token(&data, &origin).as_deref(),
+            Some("c2t_second")
+        );
+        clear_device_token(&data);
+        assert_eq!(read_device_token(&data, &origin), None);
+        fs::remove_dir_all(data).unwrap();
+    }
+
+    #[test]
+    fn a_malformed_device_token_is_not_saved() {
+        let data = scratch("bad-device-token");
+        for (origin, token) in [
+            ("https://server.example/", "c2t_x"),
+            ("https://server.example", "not-a-token"),
+            ("server.example", "c2t_x"),
+        ] {
+            assert!(save_device_token(
+                &data,
+                &DeviceToken {
+                    origin: origin.into(),
+                    token: token.into(),
+                },
+            )
+            .is_err());
+        }
+        assert!(!data.join(DEVICE_TOKEN_FILE).exists());
+        let _ = fs::remove_dir_all(data);
     }
 
     #[test]
