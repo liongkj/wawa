@@ -87,21 +87,25 @@ else
   if [ -z "$route" ]; then
     say 'How should your other computers reach this server?'
     say '  1) Privately through Tailscale. Recommended for a computer at home.'
-    say '  2) Publicly through a domain you own. Recommended for a rented server.'
-    say '  3) Through Cloudflare Tunnel, with a domain on Cloudflare. For a computer at home'
+    say '  2) Privately through Tailscale, at your own domain on Cloudflare.'
+    say '  3) Publicly through a domain you own. Recommended for a rented server.'
+    say '  4) Through Cloudflare Tunnel, with a domain on Cloudflare. For a computer at home'
     say '     that cannot forward ports.'
     case "$(ask 'Choice [1]: ')" in
       ''|1) route=tailscale;;
-      2) route=domain;;
-      3) route=cloudflare;;
-      *) fail 'Choose 1, 2 or 3, then run this command again.';;
+      2) route=tailscale-domain;;
+      3) route=domain;;
+      4) route=cloudflare;;
+      *) fail 'Choose 1, 2, 3 or 4, then run this command again.';;
     esac
   fi
 fi
-case "$route" in tailscale|domain|cloudflare) ;; *) fail 'WAWA_ROUTE must be tailscale, domain or cloudflare.';; esac
+case "$route" in tailscale|tailscale-domain|domain|cloudflare) ;; *) fail 'WAWA_ROUTE must be tailscale, tailscale-domain, domain or cloudflare.';; esac
+on_tailnet=false
+case "$route" in tailscale|tailscale-domain) on_tailnet=true;; esac
 
 server_host='' domain=''
-if [ "$route" = tailscale ]; then
+if [ "$on_tailnet" = true ]; then
   if ! command -v tailscale >/dev/null; then
     say 'Tailscale connects your devices privately.'
     confirm 'Install Tailscale from its official installer now?' || fail 'Tailscale is required for a private server.'
@@ -136,6 +140,51 @@ fi
 
 valid_domain() {
   [[ "$1" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$ ]]
+}
+# Cloudflare API calls read the token from a private header file, never from arguments.
+cloudflare() {
+  local method=$1 path=$2 data=${3:-}
+  local args=(-fsS --max-time 20 -X "$method" -H "@$scratch/cloudflare-auth" -H 'Content-Type: application/json')
+  [ -z "$data" ] || args+=(--data "$data")
+  curl "${args[@]}" "${CLOUDFLARE_API:-https://api.cloudflare.com/client/v4}$path"
+}
+point_domain_at_tailnet() {
+  local name=$1 target=$2 zone='' suffix=$1 found
+  # The zone is the longest suffix of the name that Cloudflare knows, such as example.com.
+  while [[ "$suffix" == *.* ]]; do
+    found=$(cloudflare GET "/zones?name=$suffix" | python3 -c 'import json,sys; r=json.load(sys.stdin).get("result") or []; print(r[0]["id"] if r else "")') ||
+      fail 'Cloudflare refused the API token. Create one with Zone, DNS, Edit permission for your domain.'
+    if [ -n "$found" ]; then zone=$found; break; fi
+    suffix=${suffix#*.}
+  done
+  [ -n "$zone" ] || fail "No Cloudflare zone for $name is visible to this token."
+  cloudflare GET "/zones/$zone/dns_records?name=$name" > "$scratch/records.json" ||
+    fail 'Cloudflare refused to list DNS records. Give the token Zone, DNS, Edit permission.'
+  local plan
+  plan=$(python3 - "$scratch/records.json" "$target" <<'PY'
+import json, sys
+records = json.load(open(sys.argv[1])).get('result') or []
+target = sys.argv[2]
+others = [r for r in records if r.get('type') != 'CNAME']
+cname = [r for r in records if r.get('type') == 'CNAME']
+if others:
+    print('conflict ' + others[0].get('type', 'record'))
+elif not cname:
+    print('create')
+elif cname[0].get('content') == target and not cname[0].get('proxied'):
+    print('keep')
+else:
+    print('update ' + cname[0]['id'])
+PY
+  )
+  local record
+  record=$(python3 -c 'import json,sys; print(json.dumps({"type":"CNAME","name":sys.argv[1],"content":sys.argv[2],"proxied":False,"ttl":1}))' "$name" "$target")
+  case "$plan" in
+    conflict*) fail "$name already has a ${plan#conflict } record in Cloudflare. Remove it or choose another name, then run this command again.";;
+    create) cloudflare POST "/zones/$zone/dns_records" "$record" >/dev/null || fail 'Cloudflare refused to create the DNS record.';;
+    update*) cloudflare PUT "/zones/$zone/dns_records/${plan#update }" "$record" >/dev/null || fail 'Cloudflare refused to update the DNS record.';;
+  esac
+  say "$name points to $target, which only your tailnet can reach."
 }
 check_domain_points_here() {
   local public_ip resolved
@@ -176,9 +225,10 @@ with socket.socket() as sock:
     print(sock.getsockname()[1])
 PY
   )
+  tls_port=''
   engine=${WAWA_ENGINE:-whatsapp-web.js}
   case "$engine" in whatsapp-web.js|baileys) ;; *) fail 'WAWA_ENGINE must be whatsapp-web.js or baileys.';; esac
-  domain='' tunnel_token='' proxies=''
+  domain='' tunnel_token='' api_token='' proxies=''
   case "$route" in
     tailscale)
       tailscale serve status --json > "$scratch/serve.json"
@@ -196,7 +246,7 @@ PY
       )
       origin="https://$server_host:$https_port"
       ;;
-    domain|cloudflare)
+    tailscale-domain|domain|cloudflare)
       domain=${WAWA_DOMAIN:-}
       [ -n "$domain" ] || domain=$(ask 'Domain for this server, such as tasks.example.com: ')
       domain=$(printf '%s' "$domain" | tr '[:upper:]' '[:lower:]')
@@ -205,7 +255,32 @@ PY
       # Every request reaches Wawa through the proxy container, so lockouts must count the
       # forwarded client. Only containers on Docker's private networks may set that header.
       proxies='172.16.0.0/12,192.168.0.0/16'
-      if [ "$route" = domain ]; then
+      if [ "$route" = tailscale-domain ]; then
+        tailscale serve status --json > "$scratch/serve.json"
+        python3 - "$scratch/serve.json" <<'PY' || fail 'Port 443 on this server is already served by Tailscale. Free it, or choose the Tailscale route, then run this command again.'
+import json, sys
+sys.exit(1 if '443' in (json.load(open(sys.argv[1])).get('TCP') or {}) else 0)
+PY
+        tls_port=$(python3 - <<'PY'
+import socket
+with socket.socket() as sock:
+    sock.bind(('127.0.0.1', 0))
+    print(sock.getsockname()[1])
+PY
+        )
+        say "Create a Cloudflare API token with Zone, DNS, Edit permission for $domain's zone."
+        api_token=${WAWA_CLOUDFLARE_API_TOKEN:-}
+        if [ -z "$api_token" ]; then
+          need_tty
+          printf 'Cloudflare API token: ' > /dev/tty
+          IFS= read -r -s api_token < /dev/tty
+          printf '\n' > /dev/tty
+        fi
+        [[ "$api_token" =~ ^[A-Za-z0-9_-]+$ ]] && [ "${#api_token}" -ge 30 ] && [ "${#api_token}" -le 200 ] ||
+          fail 'That does not look like a Cloudflare API token. Copy it again from your Cloudflare profile.'
+        ( umask 077; printf 'Authorization: Bearer %s\n' "$api_token" > "$scratch/cloudflare-auth" )
+        point_domain_at_tailnet "$domain" "$server_host"
+      elif [ "$route" = domain ]; then
         check_domain_points_here "$domain"
       else
         say "In Cloudflare Zero Trust, create a tunnel, add the public hostname $domain with the"
@@ -233,8 +308,10 @@ PY
     [ -z "$domain" ] || printf 'WAWA_DOMAIN=%s\n' "$domain"
     [ -z "$proxies" ] || printf 'TRUSTED_PROXIES=%s\n' "$proxies"
     [ -z "$tunnel_token" ] || printf 'CLOUDFLARE_TUNNEL_TOKEN=%s\n' "$tunnel_token"
+    [ -z "$api_token" ] || printf 'CLOUDFLARE_API_TOKEN=%s\n' "$api_token"
+    [ -z "$tls_port" ] || printf 'WAWA_TLS_PORT=%s\n' "$tls_port"
   } > "$env_tmp"
-  unset tunnel_token password
+  unset tunnel_token api_token password
   mv "$env_tmp" "$env_file"
   env_tmp=''
 fi
@@ -263,6 +340,17 @@ else
     fail 'The saved Wawa domain is invalid. Existing settings were left untouched.'
   fi
 fi
+if [ "$route" = tailscale-domain ]; then
+  tls_port=$(saved WAWA_TLS_PORT)
+  case "$tls_port" in ''|*[!0-9]*) fail 'The saved Wawa ports are invalid.';; esac
+  tailscale serve status --json > "$scratch/serve.json"
+  python3 - "$scratch/serve.json" "$tls_port" <<'PY'
+import json, sys
+used = (json.load(open(sys.argv[1])).get('TCP') or {}).get('443')
+if used and used.get('TCPForward') != f'127.0.0.1:{sys.argv[2]}':
+    raise SystemExit('Port 443 is served by another Tailscale service; nothing was changed.')
+PY
+fi
 
 # A small helper lives next to the settings so a timer, or a person, can refresh the
 # image, create pairing codes, or show the password without the interactive parts above.
@@ -280,7 +368,7 @@ docker_cmd=($(printf '%q ' "${docker_cmd[@]}"))
 compose_file="\$install_dir/app/deploy/server/compose.yml"
 route=\$(sed -n 's/^WAWA_ROUTE=//p' "\$install_dir/.env" | head -n 1)
 compose=("\${docker_cmd[@]}" compose --project-name wawa-server --env-file "\$install_dir/.env" -f "\$compose_file")
-case "\${route:-tailscale}" in domain|cloudflare) compose+=(--profile "\$route");; esac
+case "\${route:-tailscale}" in tailscale-domain|domain|cloudflare) compose+=(--profile "\$route");; esac
 case "\${1:-}" in
   pair) shift; exec "\${compose[@]}" exec -T wawa node dist/server/pair-cli.js "\$@";;
   password) sed -n 's/^APP_PASSWORD=//p' "\$install_dir/.env"; exit 0;;
@@ -293,6 +381,7 @@ if curl -fsSL "https://raw.githubusercontent.com/\$repo/\$ref/deploy/server/comp
   install -m 600 "\$tmp" "\$compose_file"
 fi
 before=\$("\${compose[@]}" images -q wawa 2>/dev/null || true)
+[ "\$route" != tailscale-domain ] || "\${compose[@]}" build -q --pull caddy-tailnet
 "\${compose[@]}" pull -q wawa openwa
 "\${compose[@]}" up -d --no-build --remove-orphans
 after=\$("\${compose[@]}" images -q wawa 2>/dev/null || true)
@@ -308,11 +397,20 @@ chmod 700 "$install_dir/update.sh"
 compose=("${docker_cmd[@]}" compose --project-name wawa-server --env-file "$env_file" -f "$expected_project_dir/compose.yml")
 [ "$route" = tailscale ] || compose+=(--profile "$route")
 say 'Downloading the latest Wawa and starting it with its WhatsApp connection…'
+if [ "$route" = tailscale-domain ]; then
+  say 'Building Caddy with Cloudflare DNS support. The first build takes a few minutes…'
+  "${compose[@]}" build -q --pull caddy-tailnet
+fi
 "${compose[@]}" pull -q wawa openwa
 "${compose[@]}" up -d --no-build --remove-orphans
-if [ "$route" = tailscale ] && ! tailscale serve --bg --https="$https_port" "http://127.0.0.1:$local_port"; then
+serve_args=()
+case "$route" in
+  tailscale) serve_args=(--bg --https="$https_port" "http://127.0.0.1:$local_port");;
+  tailscale-domain) serve_args=(--bg --tcp=443 "tcp://127.0.0.1:$tls_port");;
+esac
+if [ "${#serve_args[@]}" -gt 0 ] && ! tailscale serve "${serve_args[@]}"; then
   say 'Administrator access is needed to finish the private connection.'
-  as_admin tailscale serve --bg --https="$https_port" "http://127.0.0.1:$local_port"
+  as_admin tailscale serve "${serve_args[@]}"
 fi
 
 auto_update=${WAWA_AUTO_UPDATE:-1}
@@ -366,7 +464,8 @@ done
 if [ "$route" != tailscale ]; then
   say "Checking that $origin reaches this server…"
   reachable=false
-  for _ in $(seq 1 45); do
+  # Certificates over Cloudflare DNS wait for the record to propagate.
+  for _ in $(seq 1 90); do
     if curl -fsS --max-time 5 "$origin/api/pair/info" >/dev/null 2>&1; then
       reachable=true
       break
@@ -377,14 +476,17 @@ if [ "$route" != tailscale ]; then
     if [ "$route" = domain ]; then
       fail "Wawa is running, but $origin did not answer. Open ports 80 and 443 to this server in its firewall and at your hosting provider, then run this command again."
     fi
+    if [ "$route" = tailscale-domain ]; then
+      fail "Wawa is running, but $origin did not answer. Check that this server uses Tailscale DNS (tailscale set --accept-dns) and that the Cloudflare token can edit DNS, then run this command again."
+    fi
     fail "Wawa is running, but $origin did not answer. In Cloudflare, check that the tunnel is healthy and that $domain points to http://wawa:2786, then run this command again."
   fi
 fi
 
 pairing=$("${compose[@]}" exec -T wawa node dist/server/pair-cli.js) ||
   fail "Wawa is running, but no pairing code could be created. Run $install_dir/update.sh pair to try again."
-server_name=$domain
-[ "$route" != tailscale ] || server_name=${server_host%%.*}
+find_it="type $domain"
+[ "$route" != tailscale ] || find_it="pick ${server_host%%.*}"
 say ''
 say 'Wawa is ready.'
 say "$pairing"
@@ -395,7 +497,7 @@ if [ -f "$install_dir/.password-pending" ]; then
   rm -f "$install_dir/.password-pending"
 fi
 say ''
-say "On your Mac, open Wawa, choose Use another computer, pick $server_name, and enter the code."
+say "On your Mac, open Wawa, choose Use another computer, $find_it, and enter the code."
 say "For another computer later, run $install_dir/update.sh pair"
 say 'Then link WhatsApp, select your conversations, and sign in to Codex.'
 say "Your server files are in $install_dir. Keep the volumes and this folder backed up."

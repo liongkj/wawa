@@ -19,6 +19,7 @@ import { join, resolve } from 'node:path';
 const skip = process.platform === 'win32';
 const installer = resolve('scripts/install-server.sh');
 const compose = resolve('deploy/server/compose.yml');
+const cfToken = 'cf_' + 'x'.repeat(37);
 
 const stubs: Record<string, string> = {
   uname: 'echo Linux',
@@ -38,7 +39,7 @@ exit 1`,
   tailscale: `
 case "$*" in
   'status --json') printf '{"BackendState":"Running","Self":{"Online":true,"DNSName":"wa-test.tail.ts.net."}}';;
-  'serve status --json') printf '{}';;
+  'serve status --json') serve=\${STUB_SERVE:-}; [ -n "$serve" ] || serve='{}'; printf '%s' "$serve";;
   'serve --bg'*) exit 0;;
   *) exit 1;;
 esac`,
@@ -46,8 +47,24 @@ esac`,
 url=''
 for arg; do case "$arg" in http*) url=$arg;; esac; done
 out=''
+method=GET data='' auth=''
+prev=''
+for arg; do
+  case "$prev" in -X) method=$arg;; --data) data=$arg;; -H) case "$arg" in @*) auth=$(cat "\${arg#@}");; esac;; esac
+  prev=$arg
+done
 while [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done
 case "$url" in
+  https://cf.test/v4/*)
+    [ "$auth" = "Authorization: Bearer $STUB_CF_TOKEN" ] || exit 22
+    printf 'cloudflare %s %s %s\n' "$method" "\${url#https://cf.test/v4}" "$data" >> "$STUB_LOG"
+    case "$method \${url#https://cf.test/v4}" in
+      'GET /zones?name=example.com') echo '{"result":[{"id":"zone1"}]}';;
+      'GET /zones?name='*) echo '{"result":[]}';;
+      'GET /zones/zone1/dns_records?name='*) records=\${STUB_CF_RECORDS:-}; [ -n "$records" ] || records='{"result":[]}'; echo "$records";;
+      'POST /zones/zone1/dns_records'|'PUT /zones/zone1/dns_records/'*) echo '{"success":true}';;
+      *) exit 22;;
+    esac;;
   https://raw.githubusercontent.com/*/deploy/server/compose.yml) cp "$STUB_COMPOSE" "$out";;
   https://checkip.amazonaws.com) echo "$STUB_PUBLIC_IP";;
   http://127.0.0.1:*/api/health) exit 0;;
@@ -84,6 +101,8 @@ function fixture() {
         STUB_SERVER: 'wa-test.tail.ts.net:8443',
         STUB_PUBLIC_IP: '203.0.113.5',
         STUB_RESOLVED: '203.0.113.5',
+        STUB_CF_TOKEN: cfToken,
+        CLOUDFLARE_API: 'https://cf.test/v4',
         ...env,
       },
     });
@@ -183,7 +202,7 @@ test('a domain install checks DNS, runs Caddy, and trusts only the proxy network
     assert.equal(env.TRUSTED_PROXIES, '172.16.0.0/12,192.168.0.0/16');
     assert.match(f.calls(), /--profile domain up -d/);
     assert.doesNotMatch(f.calls(), /^tailscale /m);
-    assert.match(ok.stdout, /pick tasks\.example\.com, and enter the code/);
+    assert.match(ok.stdout, /type tasks\.example\.com, and enter the code/);
     assert.match(f.helper(['pair']).stdout, /Pairing code/);
     assert.match(f.calls(), /--profile domain exec -T wawa/);
   } finally {
@@ -248,11 +267,98 @@ test(
   },
 );
 
+test(
+  'Tailscale at your own domain creates the CNAME, builds Caddy, and passes TLS through',
+  { skip },
+  () => {
+    const f = fixture();
+    try {
+      const ok = f.run({
+        WAWA_ROUTE: 'tailscale-domain',
+        WAWA_DOMAIN: 'wa.example.com',
+        WAWA_CLOUDFLARE_API_TOKEN: cfToken,
+      });
+      assert.equal(ok.status, 0, ok.output);
+      const env = f.env();
+      assert.equal(env.WAWA_ORIGIN, 'https://wa.example.com');
+      assert.equal(env.CLOUDFLARE_API_TOKEN, cfToken);
+      assert.match(env.WAWA_TLS_PORT ?? '', /^\d+$/);
+      assert.equal(env.TRUSTED_PROXIES, '172.16.0.0/12,192.168.0.0/16');
+      const calls = f.calls();
+      assert.match(
+        calls,
+        /cloudflare POST \/zones\/zone1\/dns_records {"type": "CNAME", "name": "wa.example.com", "content": "wa-test.tail.ts.net", "proxied": false, "ttl": 1}/,
+      );
+      assert.match(calls, /--profile tailscale-domain build -q --pull caddy-tailnet/);
+      assert.match(calls, /--profile tailscale-domain up -d/);
+      assert.ok(
+        calls.includes(`tailscale serve --bg --tcp=443 tcp://127.0.0.1:${env.WAWA_TLS_PORT}`),
+      );
+      assert.ok(!calls.includes(cfToken));
+      assert.ok(!ok.output.includes(cfToken));
+      assert.match(ok.stdout, /type wa\.example\.com, and enter the code/);
+
+      // A rerun keeps the record and accepts its own Tailscale forward on 443.
+      const again = f.run({
+        STUB_SERVE: JSON.stringify({
+          TCP: { '443': { TCPForward: `127.0.0.1:${env.WAWA_TLS_PORT}` } },
+        }),
+      });
+      assert.equal(again.status, 0, again.output);
+      assert.deepEqual(f.env(), env);
+    } finally {
+      f.close();
+    }
+  },
+);
+
+test(
+  'Tailscale at your own domain refuses to replace other records or a busy port',
+  { skip },
+  () => {
+    const f = fixture();
+    try {
+      const base = {
+        WAWA_ROUTE: 'tailscale-domain',
+        WAWA_DOMAIN: 'wa.example.com',
+        WAWA_CLOUDFLARE_API_TOKEN: cfToken,
+      };
+      const record = f.run({
+        ...base,
+        STUB_CF_RECORDS: JSON.stringify({ result: [{ id: 'r1', type: 'A', content: '1.2.3.4' }] }),
+      });
+      assert.match(record.stderr, /already has a A record in Cloudflare/);
+      assert.doesNotMatch(f.calls(), /cloudflare (POST|PUT)/);
+      const stale = f.run({
+        ...base,
+        STUB_CF_RECORDS: JSON.stringify({
+          result: [{ id: 'r2', type: 'CNAME', content: 'old.example.net', proxied: true }],
+        }),
+      });
+      assert.equal(stale.status, 0, stale.output);
+      assert.match(f.calls(), /cloudflare PUT \/zones\/zone1\/dns_records\/r2 /);
+      rmSync(join(f.dir, '.env'));
+      const busy = f.run({
+        ...base,
+        STUB_SERVE: JSON.stringify({ TCP: { '443': { HTTPS: true } } }),
+      });
+      assert.match(busy.stderr, /Port 443 on this server is already served by Tailscale/);
+      const badToken = f.run({ ...base, WAWA_CLOUDFLARE_API_TOKEN: 'cf_' + 'y'.repeat(37) });
+      assert.match(badToken.stderr, /Cloudflare refused the API token/);
+    } finally {
+      f.close();
+    }
+  },
+);
+
 test('invalid choices are refused before anything is written', { skip }, () => {
   const f = fixture();
   try {
     const route = f.run({ WAWA_ROUTE: 'carrier-pigeon' });
-    assert.match(route.stderr, /WAWA_ROUTE must be tailscale, domain or cloudflare/);
+    assert.match(
+      route.stderr,
+      /WAWA_ROUTE must be tailscale, tailscale-domain, domain or cloudflare/,
+    );
     const domain = f.run({ WAWA_ROUTE: 'domain', WAWA_DOMAIN: 'https://tasks.example.com/x' });
     assert.match(domain.stderr, /Enter a domain such as tasks\.example\.com/);
     const engine = f.run({ WAWA_ROUTE: 'tailscale', WAWA_ENGINE: 'other' });

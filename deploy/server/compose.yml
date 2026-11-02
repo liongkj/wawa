@@ -96,6 +96,34 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  # Tailscale at your own domain: the domain is a CNAME to this server's tailnet name, so only
+  # the tailnet can reach it. Caddy proves the domain over Cloudflare DNS, which needs the
+  # Cloudflare DNS plugin, and Tailscale Serve passes TLS through to it on loopback.
+  caddy-tailnet:
+    image: wawa-caddy-cloudflare:local
+    build:
+      dockerfile_inline: |
+        FROM caddy:2-builder AS builder
+        RUN xcaddy build --with github.com/caddy-dns/cloudflare
+        FROM caddy:2
+        COPY --from=builder /usr/bin/caddy /usr/bin/caddy
+    profiles: [tailscale-domain]
+    restart: unless-stopped
+    environment:
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+    configs:
+      - source: caddy-tailnet
+        target: /etc/caddy/Caddyfile
+    ports:
+      - '127.0.0.1:${WAWA_TLS_PORT:-0}:443'
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - wawa
+    security_opt:
+      - no-new-privileges:true
+
   # Cloudflare Tunnel: dials out to Cloudflare, so no port forwarding is needed.
   cloudflared:
     image: cloudflare/cloudflared:latest
@@ -108,6 +136,16 @@ services:
       - wawa
     security_opt:
       - no-new-privileges:true
+
+configs:
+  caddy-tailnet:
+    content: |
+      ${WAWA_DOMAIN:-localhost} {
+        tls {
+          dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+        }
+        reverse_proxy wawa:2786
+      }
 
 volumes:
   openwa-data:
