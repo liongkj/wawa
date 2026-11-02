@@ -43,6 +43,7 @@ import {
   trustedProxies,
 } from './desktop-pairing.js';
 import { UserError } from './errors.js';
+import { AppLock, isLockFree, registerAppLock, unlockToken } from './app-lock.js';
 
 const port = z.coerce
   .number()
@@ -112,6 +113,7 @@ const server = Fastify({
   trustProxy: trustedProxies(process.env.TRUSTED_PROXIES),
 });
 const desktopPairing = new DesktopPairing(store);
+const appLock = new AppLock(store);
 const moveGate = moveEnabled ? new MoveGate(server) : undefined;
 const startupAbort = new AbortController();
 let starting: Promise<void> = Promise.resolve();
@@ -231,7 +233,7 @@ server.addHook('onRequest', async (request, reply) => {
     reply.headers({
       'Access-Control-Allow-Origin': tauriOrigin,
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, X-Chat2Tasks-Session',
+      'Access-Control-Allow-Headers': 'Content-Type, X-Chat2Tasks-Session, X-Wawa-Unlock',
       'Access-Control-Max-Age': '600',
       Vary: 'Origin',
     });
@@ -266,6 +268,12 @@ server.addHook('onRequest', async (request, reply) => {
         .code(401)
         .send({ error: 'Sign in to your workspace' });
   }
+  if (
+    request.url.startsWith('/api/') &&
+    !isLockFree(request.method, request.url.split('?')[0] ?? '') &&
+    !appLock.allows(unlockToken(request.headers))
+  )
+    return reply.code(423).send({ error: 'Wawa is locked. Enter your PIN.', locked: true });
   if (
     ['POST', 'PUT', 'DELETE', 'PATCH'].includes(request.method) &&
     (!request.headers.origin ||
@@ -305,6 +313,7 @@ registerDesktopSignIn(server, {
   },
 });
 registerDesktopPairing(server, desktopPairing, { key: store.key, origins });
+registerAppLock(server, appLock);
 await registerCompanion(
   server,
   new Companion(store, sync, syncEnabled),

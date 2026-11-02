@@ -5,6 +5,7 @@ import { DesktopRoot } from './Onboarding.js';
 import { installTauriBridge } from './tauri.js';
 import { WorkspacePicker } from './WorkspacePicker.js';
 import { RemoteConnecting } from './RemoteConnecting.js';
+import { LockGate } from './LockGate.js';
 import '../shared/theme.css';
 import './style.css';
 installTauriBridge();
@@ -18,9 +19,11 @@ if (root)
       ) : desktopView === 'connecting' ? (
         <RemoteConnecting />
       ) : (
-        <DesktopRoot>
-          <App />
-        </DesktopRoot>
+        <LockGate>
+          <DesktopRoot>
+            <App />
+          </DesktopRoot>
+        </LockGate>
       )}
     </React.StrictMode>,
   );

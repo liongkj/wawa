@@ -33,6 +33,7 @@ import { openWorkspacePicker } from './tauri.js';
 import { DesktopSharingSettings } from './settings/DesktopSharingSettings.js';
 import { AttentionSettings } from './settings/AttentionSettings.js';
 import { WorkspaceTransfer } from './settings/WorkspaceTransfer.js';
+import { AppLockSettings } from './settings/AppLockSettings.js';
 import { PairedComputers } from './settings/PairedComputers.js';
 import { ProfileCard } from './settings/ProfileCard.js';
 import { ChatDialog, type DiscoveredEntry } from './settings/ChatDialog.js';
@@ -978,6 +979,7 @@ export function SettingsPanel({
           <DesktopSharingSettings notify={notify} />
         )}
         {!window.chat2tasksTauri && <PairedComputers notify={notify} />}
+        {!window.chat2tasksTauri?.demo && <AppLockSettings notify={notify} />}
         <WorkspaceTransfer notify={notify} onImport={onImportWorkspace} />
       </div>
       {savesSettings && (
