@@ -360,6 +360,7 @@ cat > "$install_dir/update.sh" <<EOF
 #   update.sh                            update to the newest published image
 #   update.sh pair [--days 30|90|365]    print a code for pairing a computer
 #   update.sh password                   show the password for signing in from a browser
+#   update.sh pin-reset                  remove a forgotten PIN lock
 set -euo pipefail
 install_dir=$(printf '%q' "$install_dir")
 repo=$(printf '%q' "$repo")
@@ -372,8 +373,9 @@ case "\${route:-tailscale}" in tailscale-domain|domain|cloudflare) compose+=(--p
 case "\${1:-}" in
   pair) shift; exec "\${compose[@]}" exec -T wawa node dist/server/pair-cli.js "\$@";;
   password) sed -n 's/^APP_PASSWORD=//p' "\$install_dir/.env"; exit 0;;
+  pin-reset) exec "\${compose[@]}" exec -T wawa node dist/server/lock-cli.js --off;;
   '') ;;
-  *) echo 'Usage: update.sh [pair [--days 30|90|365] | password]' >&2; exit 2;;
+  *) echo 'Usage: update.sh [pair [--days 30|90|365] | password | pin-reset]' >&2; exit 2;;
 esac
 tmp=\$(mktemp "\$install_dir/.compose.XXXXXXXX")
 trap 'rm -f "\$tmp"' EXIT

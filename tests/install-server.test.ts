@@ -176,6 +176,8 @@ test('update.sh creates codes in the container and shows the password', { skip }
     );
     const password = f.helper(['password']);
     assert.equal(password.stdout.trim(), f.env().APP_PASSWORD);
+    assert.equal(f.helper(['pin-reset']).status, 0);
+    assert.match(f.calls(), /exec -T wawa node dist\/server\/lock-cli\.js --off/);
     assert.equal(f.helper(['nonsense']).status, 2);
   } finally {
     f.close();
