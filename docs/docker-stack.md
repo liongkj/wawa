@@ -12,21 +12,24 @@ curl -fsSL https://raw.githubusercontent.com/liongkj/wawa/main/scripts/install-s
 
 The installer asks one question: how your other computers should reach the server.
 
-| Choice                  | Use it for                                   | You need                                                  |
-| ----------------------- | -------------------------------------------- | --------------------------------------------------------- |
-| Tailscale (recommended) | A computer at home                           | Tailscale on the server and on each Mac                   |
-| A domain you own        | A rented server                              | An A record pointing to the server, ports 80 and 443 open |
-| Cloudflare Tunnel       | A computer at home that cannot forward ports | A domain on Cloudflare and a tunnel token                 |
+| Choice                       | Use it for                                       | You need                                                                  |
+| ---------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------- |
+| Tailscale (recommended)      | A computer at home                               | Tailscale on the server and on each Mac                                   |
+| Tailscale at your own domain | A computer at home, reached by a name you choose | Tailscale on each Mac, a domain on Cloudflare, and a Cloudflare API token |
+| A domain you own             | A rented server                                  | An A record pointing to the server, ports 80 and 443 open                 |
+| Cloudflare Tunnel            | A computer at home that cannot forward ports     | A domain on Cloudflare and a tunnel token                                 |
 
 It offers to install Docker, and Tailscale for the first choice, if they are missing. It pulls the server image `ghcr.io/liongkj/wawa:latest`, which GitHub Actions publishes for amd64 and arm64 on every merge to `main`, creates a new workspace and OpenWA gateway, and sets up their private API connection. It does not ask for a password or a WhatsApp connection: it generates a strong password and uses the Standard connection, which you can change in Settings.
 
 At the end it prints the server name, an eight-digit pairing code valid for ten minutes, and the generated password. In the Mac app, choose **Use another computer**, pick the server or type its name, and enter the code. The password is for signing in from a browser and is shown only once; `update.sh password` in the server folder shows it again. For another computer, run `update.sh pair`, or create a code in **Settings → Workspaces → Paired computers**. You still need to link WhatsApp on your phone, select conversations and sign in to Codex; the WhatsApp API key is handled for you.
 
+**Tailscale at your own domain.** The address is a name you choose, such as `wa.example.com`, but only devices on your tailnet can reach it. Create a Cloudflare API token with Zone, DNS, Edit permission for the domain's zone. The installer uses it to point the name at this server's Tailscale name with an unproxied CNAME record, refusing to replace any other record, and builds Caddy with Cloudflare DNS support so it can get a certificate without being reachable from the internet. Tailscale Serve passes connections on port 443 straight to Caddy. The token is kept in the server folder's `.env` because Caddy renews the certificate with it. Type the domain in the Mac app; the app's server search lists only Tailscale names.
+
 **A domain you own.** Before running the installer, point an A record for the domain to the server's public IPv4 address. The installer checks that the domain resolves to this server, then runs Caddy, which obtains a Let’s Encrypt certificate. If the domain does not answer afterwards, open ports 80 and 443 in the server's firewall and at your hosting provider, then run the installer again.
 
 **Cloudflare Tunnel.** In Cloudflare Zero Trust, create a tunnel, add a public hostname on your Cloudflare domain with the service `http://wawa:2786`, and copy the tunnel token. The installer asks for the hostname and the token, keeps the token only in the server folder's `.env`, and runs `cloudflared`, which connects out to Cloudflare. No port forwarding is needed.
 
-For an unattended install, set `WAWA_ROUTE` to `tailscale`, `domain` or `cloudflare`, and `WAWA_DOMAIN` and `WAWA_TUNNEL_TOKEN` as needed. `WAWA_ENGINE=baileys` selects the lightweight, experimental WhatsApp connection.
+For an unattended install, set `WAWA_ROUTE` to `tailscale`, `tailscale-domain`, `domain` or `cloudflare`, and `WAWA_DOMAIN`, `WAWA_CLOUDFLARE_API_TOKEN` and `WAWA_TUNNEL_TOKEN` as needed. `WAWA_ENGINE=baileys` selects the lightweight, experimental WhatsApp connection.
 
 Codex on a remote server uses a one-time device code. You may need to enable device-code sign-in in your ChatGPT security settings. The server must stay awake and online. Back up the installer folder and the Wawa Docker volumes, including the workspace, OpenWA data, and Codex session. Rerunning the installer keeps the existing workspace and updates the server to the newest image. It keeps the route chosen the first time. It refuses to take over a different Wawa Docker project or an existing Tailscale route.
 
