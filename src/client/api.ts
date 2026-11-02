@@ -1,11 +1,19 @@
 import { z } from 'zod';
-export function appFetch(path: string, init: RequestInit = {}) {
+import { currentUnlock, lockedEvent } from './lock.js';
+export async function appFetch(path: string, init: RequestInit = {}) {
   const tauri = window.chat2tasksTauri;
-  if (!tauri) return fetch(path, init);
-  if (!path.startsWith('/') || path.startsWith('//')) throw new Error('Invalid workspace path.');
   const headers = new Headers(init.headers);
-  headers.set('X-Chat2Tasks-Session', tauri.token);
-  return fetch(tauri.origin + path, { ...init, headers });
+  const unlock = currentUnlock();
+  if (unlock) headers.set('X-Wawa-Unlock', unlock);
+  let response: Response;
+  if (!tauri) response = await fetch(path, { ...init, headers });
+  else {
+    if (!path.startsWith('/') || path.startsWith('//')) throw new Error('Invalid workspace path.');
+    headers.set('X-Chat2Tasks-Session', tauri.token);
+    response = await fetch(tauri.origin + path, { ...init, headers });
+  }
+  if (response.status === 423) window.dispatchEvent(new Event(lockedEvent));
+  return response;
 }
 export async function api<T>(path: string, schema: z.ZodType<T>, body?: unknown): Promise<T> {
   const response = await appFetch(

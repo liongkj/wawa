@@ -219,6 +219,70 @@ test('a desktop pairs with a server found on its tailnet using a short code', as
   }
 });
 
+test('a PIN lock guards the workspace until unlocked and is set from Settings', async () => {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext({ httpCredentials: { username: 'admin', password } });
+  const json = { Origin: base, 'Content-Type': 'application/json' };
+  try {
+    const page = await context.newPage();
+    // Turn the lock on from Settings.
+    await page.goto(base + '?view=settings&section=workspace');
+    const group = page.locator('section.settings-group', { hasText: 'PIN lock' });
+    await group.getByLabel('PIN', { exact: true }).fill('246810');
+    await group.getByLabel('Confirm PIN').fill('246811');
+    await expect(group.getByRole('button', { name: 'Turn on PIN lock' })).toBeDisabled();
+    await group.getByLabel('Confirm PIN').fill('246810');
+    await group.getByLabel('Lock after').selectOption('5');
+    await group.getByRole('button', { name: 'Turn on PIN lock' }).click();
+    await expect(group.getByRole('button', { name: 'Lock now' })).toBeVisible();
+    // The window that set the PIN stays usable; the API refuses anyone without an unlock.
+    const locked = await context.request.get(base + '/api/state');
+    expect(locked.status()).toBe(423);
+    expect(await locked.json()).toMatchObject({ locked: true });
+    expect((await context.request.get(base + '/api/lock')).status()).toBe(200);
+
+    // A new window starts locked.
+    const fresh = await context.newPage();
+    await fresh.goto(base);
+    await expect(fresh.getByRole('heading', { name: 'Wawa is locked' })).toBeVisible();
+    await fresh.getByLabel('Enter your PIN').fill('111111');
+    await fresh.getByRole('button', { name: 'Unlock' }).click();
+    await expect(fresh.getByRole('alert')).toHaveText('That PIN is not right.');
+    await fresh.getByLabel('Enter your PIN').fill('246810');
+    await fresh.getByRole('button', { name: 'Unlock' }).click();
+    await expect(fresh.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible();
+    // Reloading the same window keeps it unlocked.
+    await fresh.reload();
+    await expect(fresh.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible();
+
+    // Lock now returns the Settings window to the PIN screen.
+    await group.getByRole('button', { name: 'Lock now' }).click();
+    await expect(page.getByRole('heading', { name: 'Wawa is locked' })).toBeVisible();
+    await page.getByLabel('Enter your PIN').fill('246810');
+    await page.getByRole('button', { name: 'Unlock' }).click();
+
+    // Turning it off needs the current PIN.
+    await page.goto(base + '?view=settings&section=workspace');
+    await group.getByLabel('Current PIN').fill('246810');
+    await group.getByRole('button', { name: 'Turn off' }).click();
+    await expect(group.getByRole('button', { name: 'Turn on PIN lock' })).toBeVisible();
+    expect((await context.request.get(base + '/api/state')).status()).toBe(200);
+  } finally {
+    // Never leave the shared test server locked for the tests that follow.
+    const unlock = await context.request.post(base + '/api/lock/unlock', {
+      headers: json,
+      data: { pin: '246810' },
+    });
+    if (unlock.ok())
+      await context.request.post(base + '/api/lock/disable', {
+        headers: { ...json, 'X-Wawa-Unlock': (await unlock.json()).token },
+        data: { currentPin: '246810' },
+      });
+    await context.close();
+    await browser.close();
+  }
+});
+
 test('a desktop can move a workspace here and retry confirmation', async () => {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
