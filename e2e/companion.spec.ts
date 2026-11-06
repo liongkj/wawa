@@ -199,7 +199,7 @@ test('a desktop pairs with a server found on its tailnet using a short code', as
     await page.goto(base + '/?desktop=workspace');
     await page.getByRole('radio', { name: /Another computer/ }).check();
     await page.getByRole('button', { name: 'wa-service' }).click();
-    await expect(page.getByLabel('Wawa server address')).toHaveValue('wa-service.tail.ts.net');
+    await expect(page.getByLabel('Wawa server address')).toHaveValue('https://wa-service.tail.ts.net:8443');
     await expect(page.getByRole('button', { name: 'Use another computer' })).toBeEnabled();
     await page.getByLabel('Pairing code').fill('1234 5678');
     await page.getByRole('button', { name: 'Pair and connect' }).click();
@@ -209,7 +209,7 @@ test('a desktop pairs with a server found on its tailnet using a short code', as
       .poll(() => page.evaluate(() => Reflect.get(window, '__workspaceCalls')))
       .toContainEqual({
         command: 'pair_workspace',
-        args: { server: 'wa-service.tail.ts.net', code: '1234 5678' },
+        args: { server: 'https://wa-service.tail.ts.net:8443', code: '1234 5678' },
       });
     const calls = await page.evaluate(() => Reflect.get(window, '__workspaceCalls') as unknown[]);
     expect(JSON.stringify(calls)).not.toContain('set_workspace_target');

@@ -158,14 +158,19 @@ export function WorkspacePicker() {
                 <button
                   key={server.origin}
                   type="button"
-                  className={`button secondary ${address === server.host ? 'selected' : ''}`}
-                  aria-pressed={address === server.host}
-                  onClick={() => setAddress(server.host)}
+                  className={`button secondary ${address === server.origin ? 'selected' : ''}`}
+                  aria-pressed={address === server.origin}
+                  onClick={() => setAddress(server.origin)}
                 >
                   {server.name}
                 </button>
               ))}
             </div>
+          )}
+          {kind === 'remote' && found?.length === 0 && (
+            <small role="status">
+              No servers found. Enter the full server address shown by the installer.
+            </small>
           )}
           <input
             id="workspace-server"

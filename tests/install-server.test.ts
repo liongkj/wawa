@@ -65,7 +65,7 @@ case "$url" in
       'POST /zones/zone1/dns_records'|'PUT /zones/zone1/dns_records/'*) echo '{"success":true}';;
       *) exit 22;;
     esac;;
-  https://raw.githubusercontent.com/*/deploy/server/compose.yml) cp "$STUB_COMPOSE" "$out";;
+  https://raw.githubusercontent.com/*/deploy/server/compose.yml) [ -z "\${STUB_FETCH_FAIL:-}" ] || exit 22; cp "$STUB_COMPOSE" "$out";;
   https://checkip.amazonaws.com) echo "$STUB_PUBLIC_IP";;
   http://127.0.0.1:*/api/health) exit 0;;
   */api/pair/info) [ -z "\${STUB_UNREACHABLE:-}" ] || exit 7;;
@@ -108,10 +108,16 @@ function fixture() {
     });
     return { ...result, output: result.stdout + result.stderr };
   };
-  const helper = (args: string[]) =>
+  const helper = (args: string[], env: Record<string, string> = {}) =>
     spawnSync('bash', [join(dir, 'update.sh'), ...args], {
       encoding: 'utf8',
-      env: { PATH: `${bin}:${process.env.PATH}`, STUB_LOG: log, STUB_SERVER: 'x' },
+      env: {
+        PATH: `${bin}:${process.env.PATH}`,
+        STUB_LOG: log,
+        STUB_SERVER: 'x',
+        STUB_COMPOSE: compose,
+        ...env,
+      },
     });
   return {
     dir,
@@ -176,13 +182,29 @@ test('update.sh creates codes in the container and shows the password', { skip }
     );
     const password = f.helper(['password']);
     assert.equal(password.stdout.trim(), f.env().APP_PASSWORD);
-    assert.equal(f.helper(['pin-reset']).status, 0);
-    assert.match(f.calls(), /exec -T wawa node dist\/server\/lock-cli\.js --off/);
     assert.equal(f.helper(['nonsense']).status, 2);
   } finally {
     f.close();
   }
 });
+
+test(
+  'an update stops before applying services when the server definition cannot be fetched',
+  { skip },
+  () => {
+    const f = fixture();
+    try {
+      assert.equal(f.run({ WAWA_ROUTE: 'tailscale' }).status, 0);
+      const before = f.calls();
+      const update = f.helper([], { STUB_FETCH_FAIL: '1' });
+      assert.notEqual(update.status, 0);
+      assert.match(update.stderr, /running services were not updated/);
+      assert.doesNotMatch(f.calls().slice(before.length), /docker compose .* (pull|up) /);
+    } finally {
+      f.close();
+    }
+  },
+);
 
 test('a domain install checks DNS, runs Caddy, and trusts only the proxy network', { skip }, () => {
   const f = fixture();
@@ -337,7 +359,17 @@ test(
           result: [{ id: 'r2', type: 'CNAME', content: 'old.example.net', proxied: true }],
         }),
       });
-      assert.equal(stale.status, 0, stale.output);
+      assert.notEqual(stale.status, 0, stale.output);
+      assert.match(stale.output, /CNAME was not changed/);
+      assert.doesNotMatch(f.calls(), /cloudflare PUT/);
+      const approved = f.run({
+        ...base,
+        WAWA_REPLACE_CNAME: '1',
+        STUB_CF_RECORDS: JSON.stringify({
+          result: [{ id: 'r2', type: 'CNAME', content: 'old.example.net', proxied: true }],
+        }),
+      });
+      assert.equal(approved.status, 0, approved.output);
       assert.match(f.calls(), /cloudflare PUT \/zones\/zone1\/dns_records\/r2 /);
       rmSync(join(f.dir, '.env'));
       const busy = f.run({

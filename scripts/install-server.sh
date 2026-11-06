@@ -182,7 +182,22 @@ PY
   case "$plan" in
     conflict*) fail "$name already has a ${plan#conflict } record in Cloudflare. Remove it or choose another name, then run this command again.";;
     create) cloudflare POST "/zones/$zone/dns_records" "$record" >/dev/null || fail 'Cloudflare refused to create the DNS record.';;
-    update*) cloudflare PUT "/zones/$zone/dns_records/${plan#update }" "$record" >/dev/null || fail 'Cloudflare refused to update the DNS record.';;
+    update*)
+      python3 - "$scratch/records.json" "$target" <<'PY'
+import json, sys
+records = json.load(open(sys.argv[1])).get('result') or []
+record = next(r for r in records if r.get('type') == 'CNAME')
+print('Existing CNAME: {} -> {} (proxied: {})'.format(record.get('name', ''), record.get('content', ''), bool(record.get('proxied'))))
+print('Proposed target: {} (proxied: false)'.format(sys.argv[2]))
+PY
+      if [ "${WAWA_REPLACE_CNAME:-0}" != 1 ]; then
+        if ! ( : < /dev/tty ) 2>/dev/null; then
+          fail 'CNAME was not changed. Set WAWA_REPLACE_CNAME=1 to approve replacement for an unattended install.'
+        fi
+        answer=$(ask 'Replace this CNAME? Type yes to confirm: ')
+        [ "$answer" = yes ] || fail 'CNAME was not changed.'
+      fi
+      cloudflare PUT "/zones/$zone/dns_records/${plan#update }" "$record" >/dev/null || fail 'Cloudflare refused to update the DNS record.';;
   esac
   say "$name points to $target, which only your tailnet can reach."
 }
@@ -360,7 +375,6 @@ cat > "$install_dir/update.sh" <<EOF
 #   update.sh                            update to the newest published image
 #   update.sh pair [--days 30|90|365]    print a code for pairing a computer
 #   update.sh password                   show the password for signing in from a browser
-#   update.sh pin-reset                  remove a forgotten PIN lock
 set -euo pipefail
 install_dir=$(printf '%q' "$install_dir")
 repo=$(printf '%q' "$repo")
@@ -373,26 +387,22 @@ case "\${route:-tailscale}" in tailscale-domain|domain|cloudflare) compose+=(--p
 case "\${1:-}" in
   pair) shift; exec "\${compose[@]}" exec -T wawa node dist/server/pair-cli.js "\$@";;
   password) sed -n 's/^APP_PASSWORD=//p' "\$install_dir/.env"; exit 0;;
-  pin-reset) exec "\${compose[@]}" exec -T wawa node dist/server/lock-cli.js --off;;
   '') ;;
-  *) echo 'Usage: update.sh [pair [--days 30|90|365] | password | pin-reset]' >&2; exit 2;;
+  *) echo 'Usage: update.sh [pair [--days 30|90|365] | password]' >&2; exit 2;;
 esac
-tmp=\$(mktemp "\$install_dir/.compose.XXXXXXXX")
+tmp=\$(mktemp "\$install_dir/app/deploy/server/.compose.XXXXXXXX")
 trap 'rm -f "\$tmp"' EXIT
-if curl -fsSL "https://raw.githubusercontent.com/\$repo/\$ref/deploy/server/compose.yml" -o "\$tmp" && grep -q '^services:' "\$tmp"; then
-  install -m 600 "\$tmp" "\$compose_file"
+if ! curl -fsSL "https://raw.githubusercontent.com/\$repo/\$ref/deploy/server/compose.yml" -o "\$tmp" || ! grep -q '^services:' "\$tmp"; then
+  echo 'Could not fetch a valid server definition; the running services were not updated.' >&2
+  exit 1
 fi
-before=\$("\${compose[@]}" images -q wawa 2>/dev/null || true)
+"\${docker_cmd[@]}" compose --project-name wawa-server --env-file "\$install_dir/.env" -f "\$tmp" config -q
+install -m 600 "\$tmp" "\$compose_file"
 [ "\$route" != tailscale-domain ] || "\${compose[@]}" build -q --pull caddy-tailnet
 "\${compose[@]}" pull -q wawa openwa
 "\${compose[@]}" up -d --no-build --remove-orphans
-after=\$("\${compose[@]}" images -q wawa 2>/dev/null || true)
-if [ "\$before" != "\$after" ]; then
-  "\${docker_cmd[@]}" image prune -f --filter label=org.opencontainers.image.source=https://github.com/\$repo >/dev/null 2>&1 || true
-  echo "Wawa updated."
-else
-  echo "Wawa is already up to date."
-fi
+echo 'Wawa update applied. Check service status and connection health before relying on it.'
+"\${compose[@]}" ps
 EOF
 chmod 700 "$install_dir/update.sh"
 

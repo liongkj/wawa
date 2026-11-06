@@ -8,7 +8,7 @@ import { ComputerPairResultSchema, PairInfoSchema } from '../shared/pairing.js';
 const run = promisify(execFile);
 
 /** 443 for a domain or IP behind Caddy, then the range the installer takes for Tailscale Serve. */
-export const pairingPorts = [443, ...Array.from({ length: 20 }, (_, i) => 8443 + i)];
+export const pairingPorts = [443, ...Array.from({ length: 100 }, (_, i) => 8443 + i)];
 const loopbackHosts = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 export type Probe = (origin: string) => Promise<boolean>;

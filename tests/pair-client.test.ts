@@ -24,7 +24,7 @@ test('a bare tailnet name is completed with the MagicDNS suffix and tried on the
   assert.equal(origins.length, pairingPorts.length);
   assert.equal(origins[0], 'https://wa-service.tailb4401b.ts.net');
   assert.equal(origins[1], 'https://wa-service.tailb4401b.ts.net:8443');
-  assert.equal(origins.at(-1), 'https://wa-service.tailb4401b.ts.net:8462');
+  assert.equal(origins.at(-1), 'https://wa-service.tailb4401b.ts.net:8542');
 });
 
 test('domains, IP addresses, ports and full URLs are used as typed', () => {
@@ -80,12 +80,12 @@ test('discovery lists online tailnet peers that answer as Wawa servers', async (
     probed.push(origin);
     return (
       origin === 'https://fedora.tail.ts.net:8443' ||
-      origin === 'https://backup.tail.ts.net:8450' ||
+      origin === 'https://backup.tail.ts.net:8542' ||
       origin === 'https://old-box.tail.ts.net:8443'
     );
   };
   assert.deepEqual(await discover(status, probe), [
-    { name: 'backup', host: 'backup.tail.ts.net', origin: 'https://backup.tail.ts.net:8450' },
+    { name: 'backup', host: 'backup.tail.ts.net', origin: 'https://backup.tail.ts.net:8542' },
     { name: 'fedora', host: 'fedora.tail.ts.net', origin: 'https://fedora.tail.ts.net:8443' },
   ]);
   assert.ok(!probed.some((origin) => origin.includes('old-box')));
