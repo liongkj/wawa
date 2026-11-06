@@ -20,7 +20,7 @@ const content = {
     stop: 'Stop the story',
     storyTitle: 'A familiar conversation',
     storyHint: 'An illustrated story',
-    flood: ['Can you send the quote?', 'Photo', 'Okay noted!', 'Any update?', '👍', 'Which chat was it in?', 'Photo', 'Need this by tomorrow'],
+    flood: ['Can you send the quote?', 'Photo', 'Okay noted!', 'Any update?', '👍', 'Which chat was it in?', 'Photo', 'Need this by tomorrow', 'Is Saturday still okay?', 'Please check the invoice', 'Voice message · 0:18', 'Can change the colour?', 'Thanks!', 'When can you deliver?', 'Sent the details above', 'One more thing…', 'Can we add the gate?', 'I will confirm later', 'Photo · 3 images', 'Hello, just following up'],
     floodSources: ['CLIENT', 'PROJECT', 'SUPPLIER', 'GROUP'],
     audioError: 'Audio could not play. Try again or read the examples below.',
     story: [
@@ -137,7 +137,7 @@ const content = {
     stop: 'Hentikan cerita',
     storyTitle: 'Pernah berlaku?',
     storyHint: 'Cerita bergambar',
-    flood: ['Boleh hantar sebut harga?', 'Gambar', 'Baik, noted!', 'Ada perkembangan?', '👍', 'Chat yang mana satu?', 'Gambar', 'Perlu sebelum esok'],
+    flood: ['Boleh hantar sebut harga?', 'Gambar', 'Baik, noted!', 'Ada perkembangan?', '👍', 'Chat yang mana satu?', 'Gambar', 'Perlu sebelum esok', 'Sabtu masih boleh?', 'Tolong semak invois', 'Mesej suara · 0:18', 'Boleh tukar warna?', 'Terima kasih!', 'Bila boleh hantar?', 'Saya dah hantar detail', 'Satu lagi…', 'Boleh tambah pagar?', 'Nanti saya sahkan', 'Gambar · 3 imej', 'Hai, nak follow up'],
     floodSources: ['PELANGGAN', 'PROJEK', 'PEMBEKAL', 'KUMPULAN'],
     audioError: 'Audio tidak dapat dimainkan. Cuba lagi atau baca contoh di bawah.',
     story: [

@@ -20,10 +20,7 @@ export function StoryPerformance({ step, audioRef, script, messages, sources, re
     let cards = [];
     const gaze = { x: 0, y: 0, vx: 0, vy: 0 };
     const mouth = { value: 0, velocity: 0 };
-    const positions = [
-      [.17, .19], [.81, .24], [.1, .40], [.86, .46], [.22, .58], [.78, .64],
-      [.32, .12], [.66, .12], [.13, .72], [.9, .72], [.35, .32], [.69, .36],
-    ];
+
 
     function resize() {
       const rect = canvas.getBoundingClientRect();
@@ -58,12 +55,19 @@ export function StoryPerformance({ step, audioRef, script, messages, sources, re
     }
 
     function spawn(index) {
-      const [positionX, y] = positions[index % positions.length];
-      const x = width < 600 ? Math.max(.2, Math.min(.8, positionX)) : positionX;
+      const small = width < 600;
+      const columns = small ? 3 : 5;
+      const rows = 5;
+      const slot = (index * 7) % (columns * rows);
+      const column = slot % columns;
+      const row = Math.floor(slot / columns);
+      const jitter = (((index * 13) % 9) - 4) * .009;
+      const x = (small ? .19 : .12) + column * (small ? .31 : .19) + jitter;
+      const y = .11 + row * .14 + jitter;
       const side = x < .5 ? -1 : 1;
       cards.push({ x: side < 0 ? -0.35 : 1.35, y: y + .08, vx: 0, vy: 0,
-        tx: x, ty: y, rotation: side * .035, message: index, opacity: 0 });
-      if (index && !input.current.reduced) ping();
+        tx: x, ty: y, rotation: ((index % 5) - 2) * .025, message: index, opacity: 0 });
+      if (index && index % 3 === 1 && !input.current.reduced) ping();
     }
 
     function rounded(x, y, w, h, r) {
@@ -76,17 +80,17 @@ export function StoryPerformance({ step, audioRef, script, messages, sources, re
       if (input.current.reduced) {
         card.x = card.tx; card.y = card.ty; card.opacity = step === 3 ? 0 : 1;
       } else {
-      card.vx += (card.tx - card.x) * acceleration * dt;
-      card.vy += (card.ty - card.y) * acceleration * dt;
-      card.vx *= Math.exp(-9 * dt);
-      card.vy *= Math.exp(-9 * dt);
-      card.x += card.vx * dt;
-      card.y += card.vy * dt;
-      card.opacity += ((step === 3 ? 0 : 1) - card.opacity) * Math.min(1, dt * 5);
+        card.vx += (card.tx - card.x) * acceleration * dt;
+        card.vy += (card.ty - card.y) * acceleration * dt;
+        card.vx *= Math.exp(-9 * dt);
+        card.vy *= Math.exp(-9 * dt);
+        card.x += card.vx * dt;
+        card.y += card.vy * dt;
+        card.opacity += ((step === 3 ? 0 : 1) - card.opacity) * Math.min(1, dt * 5);
       }
       const small = width < 600;
-      const cardW = small ? Math.min(width * .36, 150) : Math.min(width * .23, 220);
-      const cardH = small ? 58 : 69;
+      const cardW = small ? Math.min(width * .31, 145) : Math.min(width * .19, 190);
+      const cardH = small ? 54 : 60;
       const x = card.x * width;
       const y = card.y * height;
       ctx.save();
@@ -226,7 +230,7 @@ export function StoryPerformance({ step, audioRef, script, messages, sources, re
       const elapsed = audio?.currentTime || 0;
       const duration = Number.isFinite(audio?.duration) ? audio.duration : 4;
       const progress = Math.max(0, Math.min(1, elapsed / duration));
-      const targetCount = step < 0 ? 1 : step === 0 ? 1 : step === 1 ? 1 + Math.floor(progress * 5) : step === 2 ? 6 + Math.floor(progress * 6) : 12;
+      const targetCount = step < 0 ? 1 : step === 0 ? 1 : step === 1 ? 1 + Math.floor(progress * 14) : step === 2 ? 15 + Math.floor(progress * 25) : 40;
       if (step >= 0 && step < 3) while (shown < targetCount) spawn(shown++);
       if (step < 0 && !cards.length) { spawn(0); shown = 1; }
       const samples = step >= 0 && step < 3 ? envelopes[script[step]?.audio.split('/').pop()] || [] : [];
@@ -234,6 +238,28 @@ export function StoryPerformance({ step, audioRef, script, messages, sources, re
       ctx.clearRect(0, 0, width, height);
       cards.forEach((card) => drawCard(card, reduced ? .04 : dt, step));
       if (step !== 3) drawHead(dt, step, sample, now / 1000);
+      if ((step === 1 || step === 2) && !reduced && cards.length && sample > .12) {
+        // Words travel toward successive chats while the person speaks; captions remain complete below.
+        const words = script[step].line.split(/\s+/);
+        const wordProgress = progress * words.length;
+        const wordIndex = Math.min(words.length - 1, Math.floor(wordProgress));
+        const target = cards[wordIndex % cards.length];
+        const travel = wordProgress - wordIndex;
+        const fromX = width * .5;
+        const fromY = height * .43;
+        const x = fromX + (target.tx * width - fromX) * travel;
+        const y = fromY + (target.ty * height - fromY) * travel - Math.sin(travel * Math.PI) * 26;
+        ctx.save();
+        ctx.globalAlpha = Math.min(1, travel * 5, (1 - travel) * 5);
+        ctx.font = `700 ${width < 600 ? 14 : 20}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.lineWidth = 5;
+        ctx.strokeStyle = '#161717';
+        ctx.fillStyle = '#f6eee4';
+        ctx.strokeText(words[wordIndex], x, y);
+        ctx.fillText(words[wordIndex], x, y);
+        ctx.restore();
+      }
       frame = requestAnimationFrame(draw);
     }
     frame = requestAnimationFrame(draw);
