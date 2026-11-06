@@ -379,6 +379,47 @@ export function App() {
               <div className="eyebrow">{t.preview}</div>
               <h1>{t.title}</h1>
               <p>{t.intro}</p>
+            </div>
+            <div className="story-column">
+              <div className="story-box">
+                <div className="story-top">
+                  <span>{t.storyTitle}</span>
+                  <span>{t.storyHint}</span>
+                </div>
+                <div className="story-body">
+                  <img
+                    className={`story-sprite ${storyStep >= 0 ? 'is-speaking' : ''}`}
+                    src="/story-sprite.png"
+                    alt=""
+                  />
+                  {storyStep < 0 ? (
+                    <p className="story-idle">“{t.story[0].line}”</p>
+                  ) : (
+                    <div className="story-scene" aria-live="polite" key={storyStep}>
+                      <span>{t.story[storyStep].who}</span>
+                      <p>“{t.story[storyStep].line}”</p>
+                      {storyStep === 3 && <img src="/wawa-overview.png" alt={t.screenshot} />}
+                    </div>
+                  )}
+                </div>
+                <button
+                  className="story-trigger"
+                  type="button"
+                  onClick={() => (storyStep < 0 ? playStoryStep(0) : stopStory())}
+                >
+                  {storyStep < 0 ? '▶ ' + t.listen : '■ ' + t.stop}
+                </button>
+                <audio
+                  ref={storyAudio}
+                  preload="none"
+                  onEnded={() => playStoryStep(storyStep + 1)}
+                  onError={() => {
+                    setStoryError(true);
+                    setStoryStep(-1);
+                  }}
+                />
+                {storyError && <p role="alert">{t.audioError}</p>}
+              </div>
               <div className="actions">
                 <a className="button primary" href={guide}>
                   {t.install} <span aria-hidden="true">↗</span>
@@ -388,38 +429,6 @@ export function App() {
                 </a>
               </div>
               <p className="fine">{t.fine}</p>
-            </div>
-            <div className="story-box">
-              <div className="story-top">
-                <span>{t.storyTitle}</span>
-                <span>{t.storyHint}</span>
-              </div>
-              {storyStep < 0 ? (
-                <p className="story-idle">“{t.story[0].line}”</p>
-              ) : (
-                <div className="story-scene" aria-live="polite" key={storyStep}>
-                  <span>{t.story[storyStep].who}</span>
-                  <p>“{t.story[storyStep].line}”</p>
-                  {storyStep === 3 && <img src="/wawa-overview.png" alt={t.screenshot} />}
-                </div>
-              )}
-              <button
-                className="story-trigger"
-                type="button"
-                onClick={() => (storyStep < 0 ? playStoryStep(0) : stopStory())}
-              >
-                {storyStep < 0 ? '▶ ' + t.listen : '■ ' + t.stop}
-              </button>
-              <audio
-                ref={storyAudio}
-                preload="none"
-                onEnded={() => playStoryStep(storyStep + 1)}
-                onError={() => {
-                  setStoryError(true);
-                  setStoryStep(-1);
-                }}
-              />
-              {storyError && <p role="alert">{t.audioError}</p>}
             </div>
           </div>
         </section>
