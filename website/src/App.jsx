@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import './styles.css';
+import envelopes from './story-envelopes.json';
 
 const content = {
   en: {
@@ -20,9 +21,7 @@ const content = {
     storyTitle: 'A familiar conversation',
     storyHint: 'An illustrated story',
     flood: ['Can you send the quote?', 'Photo', 'Okay noted!', 'Any update?', '👍', 'Which chat was it in?', 'Photo', 'Need this by tomorrow'],
-    floodLabel: 'Example messages piling up in different chats',
-    pauseFlood: 'Pause messages',
-    playFlood: 'Play messages',
+    floodSources: ['CLIENT', 'PROJECT', 'SUPPLIER', 'GROUP'],
     audioError: 'Audio could not play. Try again or read the examples below.',
     story: [
       { who: 'Client', line: 'Did you send the revised quote?', audio: '/audio/line-1.mp3' },
@@ -139,9 +138,7 @@ const content = {
     storyTitle: 'Pernah berlaku?',
     storyHint: 'Cerita bergambar',
     flood: ['Boleh hantar sebut harga?', 'Gambar', 'Baik, noted!', 'Ada perkembangan?', '👍', 'Chat yang mana satu?', 'Gambar', 'Perlu sebelum esok'],
-    floodLabel: 'Contoh mesej yang bertimbun dalam chat',
-    pauseFlood: 'Jeda mesej',
-    playFlood: 'Mainkan mesej',
+    floodSources: ['PELANGGAN', 'PROJEK', 'PEMBEKAL', 'KUMPULAN'],
     audioError: 'Audio tidak dapat dimainkan. Cuba lagi atau baca contoh di bawah.',
     story: [
       { who: 'Pelanggan', line: 'Dah hantar sebut harga yang baru?', audio: '/audio/ms-1.mp3' },
@@ -264,7 +261,7 @@ const previewMode = import.meta.env.DEV || import.meta.env.VITE_WAITLIST_PREVIEW
 
 export function App() {
   const [locale, setLocale] = useState('en');
-  const [malaysia, setMalaysia] = useState(false);
+  const [malaysia, setMalaysia] = useState(() => import.meta.env.DEV && new URLSearchParams(location.search).get('previewCountry') === 'MY');
   const [index, setIndex] = useState(0);
   const [paused, setPaused] = useState(false);
   const [manual, setManual] = useState(false);
@@ -273,12 +270,12 @@ export function App() {
   const [interacting, setInteracting] = useState(false);
   const [visible, setVisible] = useState(false);
   const [storyStep, setStoryStep] = useState(-1);
-  const [floodPaused, setFloodPaused] = useState(false);
   const [storyError, setStoryError] = useState(false);
   const [email, setEmail] = useState('');
   const [submitState, setSubmitState] = useState('idle');
   const carouselRef = useRef(null);
   const storyAudio = useRef(null);
+  const mouthRef = useRef(null);
   const playingStory = useRef(null);
   const t = content[locale];
   const story = malaysia ? malaysianStory[locale] : t.story;
@@ -322,6 +319,19 @@ export function App() {
     const id = setInterval(() => setIndex((i) => (i + 1) % t.examples.length), 7000);
     return () => clearInterval(id);
   }, [paused, reduced, mobile, interacting, visible, t.examples.length]);
+  useEffect(() => {
+    if (storyStep < 0 || storyStep === 3 || reduced) return;
+    const audio = storyAudio.current;
+    const samples = envelopes[activeStory[storyStep].audio.split('/').pop()] || [];
+    let frame;
+    const animateVoice = () => {
+      const level = samples[Math.floor(audio.currentTime * 20)] || 0;
+      mouthRef.current?.style.setProperty('--voice-level', String(0.35 + level * 1.8));
+      frame = requestAnimationFrame(animateVoice);
+    };
+    frame = requestAnimationFrame(animateVoice);
+    return () => cancelAnimationFrame(frame);
+  }, [storyStep, reduced, activeStory]);
   function playStoryStep(next) {
     const audio = storyAudio.current;
     if (next === 0) playingStory.current = story;
@@ -423,35 +433,52 @@ export function App() {
                   <span>{t.storyTitle}</span>
                   <span>{t.storyHint}</span>
                 </div>
-                <div className={`message-flood ${storyStep === 3 ? 'is-resolved' : ''} ${floodPaused ? 'is-paused' : ''}`} aria-label={t.floodLabel}>
-                  {t.flood.map((message, i) => (
-                    <span className={`flood-message flood-${i}`} key={i} aria-hidden="true">{message}</span>
-                  ))}
-                </div>
-                {!reduced && <button className="flood-control" type="button" onClick={() => setFloodPaused(!floodPaused)}>{floodPaused ? t.playFlood : t.pauseFlood}</button>}
-                <div className="story-body">
-                  <img
-                    className={`story-sprite ${storyStep >= 0 ? 'is-speaking' : ''}`}
-                    src="/story-sprite.png"
-                    alt=""
-                  />
-                  {storyStep < 0 ? (
-                    <p className="story-idle">“{activeStory[0].line}”</p>
-                  ) : (
-                    <div className="story-scene" aria-live="polite" key={storyStep}>
-                      <span>{activeStory[storyStep].who}</span>
-                      <p>“{activeStory[storyStep].line}”</p>
-                      {storyStep === 3 && <img src="/wawa-overview.png" alt={t.screenshot} />}
+                <div className="story-stage" data-phase={storyStep}>
+                  <div className="message-rivers" aria-hidden="true">
+                    {[0, 1, 2].map((column) => (
+                      <div className={`message-river river-${column}`} key={column}>
+                        {[...t.flood, ...t.flood, ...t.flood].map((message, i) => (
+                          <div className="river-bubble" key={i}>
+                            <span>{t.floodSources[(i + column) % 4]}</span>
+                            <strong>{t.flood[(i * 3 + column * 2) % t.flood.length]}</strong>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="stage-vignette" aria-hidden="true" />
+                  {storyStep >= 0 && storyStep < 3 && (
+                    <div className="incoming-messages" aria-hidden="true" key={storyStep}>
+                      {t.flood.slice(0, storyStep === 0 ? 2 : storyStep === 1 ? 5 : 8).map((message, i) => (
+                        <div className={`incoming incoming-${i}`} style={{ '--order': i }} key={i}>
+                          <small>{t.floodSources[i % t.floodSources.length]}</small><strong>{message}</strong>
+                        </div>
+                      ))}
                     </div>
                   )}
+                  {storyStep === 3 ? (
+                    <div className="stage-reveal"><img src="/wawa-overview.png" alt={t.screenshot} /></div>
+                  ) : (
+                    <div className="stage-character" aria-hidden="true">
+                      <img src={storyStep === 2 ? "/story-sprite-angry.png" : "/story-sprite.png"} alt="" />
+                      {storyStep >= 0 && <span className={`voice-mouth ${storyStep === 2 ? 'voice-mouth-angry' : ''}`} ref={mouthRef} />}
+                    </div>
+                  )}
+                  <div className="stage-caption" aria-live="polite">
+                    {storyStep < 0 ? (
+                      <p>“{activeStory[0].line}”</p>
+                    ) : (
+                      <><span>{activeStory[storyStep].who}</span><p>“{activeStory[storyStep].line}”</p></>
+                    )}
+                  </div>
+                  <button
+                    className="story-trigger"
+                    type="button"
+                    onClick={() => (storyStep < 0 ? playStoryStep(0) : stopStory())}
+                  >
+                    {storyStep < 0 ? '▶ ' + t.listen : '■ ' + t.stop}
+                  </button>
                 </div>
-                <button
-                  className="story-trigger"
-                  type="button"
-                  onClick={() => (storyStep < 0 ? playStoryStep(0) : stopStory())}
-                >
-                  {storyStep < 0 ? '▶ ' + t.listen : '■ ' + t.stop}
-                </button>
                 <audio
                   ref={storyAudio}
                   preload="none"
