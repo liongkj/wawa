@@ -97,6 +97,13 @@ export function SettingsPanel({
     action: 'pausing' | 'resuming';
   } | null>(null);
   const [whatsapp, setWhatsapp] = useState<z.infer<typeof WhatsappStatus> | null>(null);
+  const [managedServer, setManagedServer] = useState<boolean | null>(null);
+  const [setupModeError, setSetupModeError] = useState(false);
+  useEffect(() => {
+    void api('setup-mode', z.object({ managedServer: z.boolean() }))
+      .then((mode) => setManagedServer(mode.managedServer))
+      .catch(() => setSetupModeError(true));
+  }, []);
   const [linkingWhatsapp, setLinkingWhatsapp] = useState(false);
   const [saving, setSaving] = useState(false),
     [addingChat, setAddingChat] = useState(false),
@@ -258,6 +265,7 @@ export function SettingsPanel({
   const desktop = Boolean(window.chat2tasksDesktop || window.chat2tasksTauri);
   const gatewayPending =
     desktop &&
+    managedServer === false &&
     (config.desktopGatewayRestartRequired ||
       draft.desktopGateway.mode !== config.settings.desktopGateway.activeMode ||
       (draft.desktopGateway.mode === 'local' &&
@@ -269,7 +277,7 @@ export function SettingsPanel({
   useEffect(() => {
     if (
       section !== 'conversations' ||
-      !desktop ||
+      !(desktop || managedServer === true) ||
       gatewayPending ||
       config.settings.desktopGateway.activeMode !== 'local'
     )
@@ -289,6 +297,7 @@ export function SettingsPanel({
   }, [
     section,
     desktop,
+    managedServer,
     gatewayPending,
     config.settings.desktopGateway.activeMode,
     linkingWhatsapp,
@@ -322,7 +331,8 @@ export function SettingsPanel({
         : linkingWhatsapp || whatsapp?.qr
           ? 'Waiting for your phone'
           : 'Not linked yet';
-  const localServer = desktop && config.settings.desktopGateway.activeMode === 'local';
+  const localServer =
+    (desktop || managedServer === true) && config.settings.desktopGateway.activeMode === 'local';
   return (
     <div className="settings-page" ref={page}>
       <div className="settings-page-heading">
@@ -356,12 +366,16 @@ export function SettingsPanel({
           <SettingsGroup
             title="Server"
             description={
-              desktop
-                ? 'Where your WhatsApp connection runs. Wawa never sends a reply to WhatsApp.'
-                : 'Your WhatsApp session, connected to your own OpenWA server.'
+              managedServer
+                ? 'Your WhatsApp connection runs on this Wawa server.'
+                : desktop
+                  ? 'Where your WhatsApp connection runs. Wawa never sends a reply to WhatsApp.'
+                  : 'Your WhatsApp session, connected to your own OpenWA server.'
             }
             note={
-              desktop ? (
+              managedServer ? (
+                'The server operator controls the connection type in the server configuration.'
+              ) : desktop ? (
                 <>
                   Your tasks stay here. Each connection keeps its own WhatsApp session and followed
                   chats; switching does not move or sign out a session. Unofficial connections can
@@ -374,7 +388,62 @@ export function SettingsPanel({
               )
             }
           >
-            {desktop ? (
+            {managedServer === null ? (
+              <p role="status">
+                {setupModeError
+                  ? 'Could not load server configuration. Reload to try again.'
+                  : 'Checking server configuration…'}
+              </p>
+            ) : managedServer ? (
+              <>
+                <SettingsRow
+                  title="Connection type"
+                  description="Set WAWA_ENGINE in the server folder and recreate the services to change it."
+                >
+                  {config.settings.desktopGateway.activeEngine === 'baileys'
+                    ? 'Lightweight · experimental'
+                    : config.settings.desktopGateway.activeEngine === 'whatsapp-web.js'
+                      ? 'Standard'
+                      : 'Not available'}
+                </SettingsRow>
+                {localServer && (
+                  <SettingsRow
+                    title="WhatsApp"
+                    description={<StatusDot tone={whatsappTone}>{whatsappText}</StatusDot>}
+                  >
+                    {whatsapp?.status !== 'ready' && (
+                      <button
+                        className="button secondary"
+                        disabled={linkingWhatsapp}
+                        onClick={() => {
+                          setLinkingWhatsapp(true);
+                          void api('desktop/whatsapp/start', z.object({ status: z.string() }), {})
+                            .then(() => api('desktop/whatsapp/status', WhatsappStatus))
+                            .then(setWhatsapp)
+                            .catch((error) => {
+                              setLinkingWhatsapp(false);
+                              notify(errorMessage(error));
+                            });
+                        }}
+                      >
+                        {linkingWhatsapp ? 'Preparing connection…' : 'Link WhatsApp'}
+                      </button>
+                    )}
+                  </SettingsRow>
+                )}
+                {whatsapp?.qr && (
+                  <div className="settings-row stacked">
+                    <div className="onboarding-qr">
+                      <img src={whatsapp.qr} alt="WhatsApp pairing QR code" />
+                      <p>
+                        On your phone, open WhatsApp → Linked devices → Link a device, then scan
+                        this code.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : desktop ? (
               <>
                 <SettingsRow
                   title="Runs on"

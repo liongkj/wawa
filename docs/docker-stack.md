@@ -31,6 +31,14 @@ At the end it prints the server name, an eight-digit pairing code valid for ten 
 
 For an unattended install, set `WAWA_ROUTE` to `tailscale`, `tailscale-domain`, `domain` or `cloudflare`, and `WAWA_DOMAIN`, `WAWA_CLOUDFLARE_API_TOKEN` and `WAWA_TUNNEL_TOKEN` as needed. `WAWA_ENGINE=baileys` selects the lightweight, experimental WhatsApp connection.
 
+To change the engine on an existing installer stack, edit `WAWA_ENGINE` in its private `.env`, then recreate the Wawa and OpenWA services using that installation's Compose file. From the server folder, for the Tailscale route:
+
+```sh
+docker compose --project-name wawa-server --env-file .env -f app/deploy/server/compose.yml up -d
+```
+
+For another route, add its Compose profile (`--profile tailscale-domain`, `--profile domain`, or `--profile cloudflare`) before `up`. Relink WhatsApp if needed. Settings shows the active connection type; it does not change this stack's engine.
+
 Codex on a remote server uses a one-time device code. You may need to enable device-code sign-in in your ChatGPT security settings. The server must stay awake and online. Back up the installer folder and the Wawa Docker volumes, including the workspace, OpenWA data, and Codex session. Rerunning the installer keeps the existing workspace and updates the server to the newest image. It keeps the route chosen the first time. It refuses to take over a different Wawa Docker project or an existing Tailscale route.
 
 ### Updates

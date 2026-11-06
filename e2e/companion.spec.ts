@@ -199,7 +199,9 @@ test('a desktop pairs with a server found on its tailnet using a short code', as
     await page.goto(base + '/?desktop=workspace');
     await page.getByRole('radio', { name: /Another computer/ }).check();
     await page.getByRole('button', { name: 'wa-service' }).click();
-    await expect(page.getByLabel('Wawa server address')).toHaveValue('https://wa-service.tail.ts.net:8443');
+    await expect(page.getByLabel('Wawa server address')).toHaveValue(
+      'https://wa-service.tail.ts.net:8443',
+    );
     await expect(page.getByRole('button', { name: 'Use another computer' })).toBeEnabled();
     await page.getByLabel('Pairing code').fill('1234 5678');
     await page.getByRole('button', { name: 'Pair and connect' }).click();
@@ -2088,6 +2090,43 @@ test('desktop setup returns to WhatsApp after choosing the lightweight connectio
     await expect(page.getByRole('heading', { name: 'Bring your conversations in.' })).toBeVisible();
     await expect(page.getByRole('radio', { name: /Lightweight/ })).toBeChecked();
     await expect(page.getByRole('button', { name: 'Connect WhatsApp' })).toBeVisible();
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+});
+
+test('server settings show that the operator controls the WhatsApp engine', async () => {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext({ httpCredentials: { username: 'admin', password } });
+  try {
+    const page = await context.newPage();
+    await page.route('**/api/setup-mode', (route) =>
+      route.fulfill({ json: { managedServer: true } }),
+    );
+    await page.route('**/api/desktop/status', (route) =>
+      route.fulfill({
+        json: {
+          setupComplete: true,
+          imported: false,
+          codex: { installed: true, signedIn: true, signingIn: false, failed: false },
+        },
+      }),
+    );
+    await page.goto(base + '/?view=settings&section=conversations');
+    await page.getByRole('button', { name: 'WhatsApp & chats', exact: true }).click();
+    await expect(
+      page.getByText(
+        'The server operator controls the connection type in the server configuration.',
+      ),
+    ).toBeVisible();
+    await expect(
+      page.getByText(
+        'Set WAWA_ENGINE in the server folder and recreate the services to change it.',
+      ),
+    ).toBeVisible();
+    await expect(page.getByLabel('Connection type')).toHaveCount(0);
+    await expect(page.getByLabel('OpenWA API URL')).toHaveCount(0);
   } finally {
     await context.close();
     await browser.close();
