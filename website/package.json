@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node --test waitlist-worker/index.test.js"
+    "test": "node --test worker.test.js waitlist-worker/index.test.js"
   },
   "dependencies": {
     "@vitejs/plugin-react": "5.0.4",

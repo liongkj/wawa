@@ -133,3 +133,20 @@ blockquote { margin: 8px 0 0; padding: 16px; border-radius: 8px; background: #f1
 .story-column .fine { margin-bottom: 0; }
 @keyframes sprite-listen { from { transform: translateY(4px) rotate(-3deg); } to { transform: translateY(0) rotate(0); } }
 @media (prefers-reduced-motion: reduce) { .story-sprite.is-speaking { animation: none; } }
+
+/* A short, repeating visual buildup; the voice remains opt-in. */
+.message-flood { height: 135px; position: relative; overflow: hidden; margin: 18px -8px 0; }
+.flood-message { position: absolute; display: block; max-width: 70%; padding: 8px 12px; border-radius: 10px 10px 10px 2px; background: #484c4e; color: #f5f5f5; font-size: 12px; line-height: 1.3; opacity: 0; animation: flood 12s linear infinite; }
+.flood-0 { left: 3%; top: 4px; animation-delay: 0s; }
+.flood-1 { right: 4%; top: 12px; animation-delay: .8s; background: #60605b; }
+.flood-2 { left: 9%; top: 39px; animation-delay: 1.5s; }
+.flood-3 { right: 7%; top: 49px; animation-delay: 2.2s; background: #60605b; }
+.flood-4 { left: 2%; top: 76px; animation-delay: 2.8s; }
+.flood-5 { right: 4%; top: 86px; animation-delay: 3.4s; background: #815047; }
+.flood-6 { left: 10%; top: 110px; animation-delay: 4s; }
+.flood-7 { right: 2%; top: 103px; animation-delay: 4.5s; background: #815047; }
+.flood-control { align-self: end; padding: 4px 0; border: 0; color: #c8cbcd; background: transparent; font-size: 11px; cursor: pointer; }
+.message-flood.is-paused .flood-message { animation-play-state: paused; }
+.message-flood.is-resolved .flood-message { animation: none; opacity: .15; }
+@keyframes flood { 0% { opacity: 0; transform: translateY(14px); } 5%, 55% { opacity: 1; transform: translateY(0); } 68%, 100% { opacity: 0; transform: translateY(-12px); } }
+@media (prefers-reduced-motion: reduce) { .flood-message { animation: none; opacity: 1; } }

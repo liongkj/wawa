@@ -18,7 +18,11 @@ const content = {
     listen: 'Play the story with sound',
     stop: 'Stop the story',
     storyTitle: 'A familiar conversation',
-    storyHint: 'A short, illustrated example',
+    storyHint: 'An illustrated story',
+    flood: ['Can you send the quote?', 'Photo', 'Okay noted!', 'Any update?', '👍', 'Which chat was it in?', 'Photo', 'Need this by tomorrow'],
+    floodLabel: 'Example messages piling up in different chats',
+    pauseFlood: 'Pause messages',
+    playFlood: 'Play messages',
     audioError: 'Audio could not play. Try again or read the examples below.',
     story: [
       { who: 'Client', line: 'Did you send the revised quote?', audio: '/audio/line-1.mp3' },
@@ -133,7 +137,11 @@ const content = {
     listen: 'Mainkan cerita dengan suara',
     stop: 'Hentikan cerita',
     storyTitle: 'Pernah berlaku?',
-    storyHint: 'Contoh cerita ringkas',
+    storyHint: 'Cerita bergambar',
+    flood: ['Boleh hantar sebut harga?', 'Gambar', 'Baik, noted!', 'Ada perkembangan?', '👍', 'Chat yang mana satu?', 'Gambar', 'Perlu sebelum esok'],
+    floodLabel: 'Contoh mesej yang bertimbun dalam chat',
+    pauseFlood: 'Jeda mesej',
+    playFlood: 'Mainkan mesej',
     audioError: 'Audio tidak dapat dimainkan. Cuba lagi atau baca contoh di bawah.',
     story: [
       { who: 'Pelanggan', line: 'Dah hantar sebut harga yang baru?', audio: '/audio/ms-1.mp3' },
@@ -236,12 +244,27 @@ const content = {
     footer: 'Perbualan anda, disusun menjadi kerja.',
   },
 };
+const malaysianStory = {
+  en: [
+    { who: 'Client', line: 'Eh, did you send the revised quote?', audio: '/audio/my-en-1.mp3' },
+    { who: 'You', line: 'Walao eh, I know it is in WhatsApp. Which chat was it in?', audio: '/audio/my-en-2.mp3' },
+    { who: 'You', line: 'Amboi, seventeen chats! 不懂放哪里了!', audio: '/audio/my-en-3.mp3' },
+    { who: 'You', line: 'Ah, jumpa already. Wawa kept the request with the original message.', audio: '/audio/my-en-4.mp3' },
+  ],
+  ms: [
+    { who: 'Pelanggan', line: 'Eh, dah hantar sebut harga yang baru?', audio: '/audio/my-ms-1.mp3' },
+    { who: 'Anda', line: 'Alamak, saya tahu ada dalam WhatsApp. Chat yang mana satu?', audio: '/audio/my-ms-2.mp3' },
+    { who: 'Anda', line: 'Amboi, tujuh belas chat! 不懂放哪里了!', audio: '/audio/my-ms-3.mp3' },
+    { who: 'Anda', line: 'Ha, jumpa pun. Wawa simpan permintaan bersama mesej asal.', audio: '/audio/my-ms-4.mp3' },
+  ],
+};
 const guide = 'https://github.com/liongkj/wawa/blob/main/docs/docker-stack.md';
 const waitlistEndpoint = import.meta.env.VITE_WAITLIST_API_URL || '/api/waitlist';
 const previewMode = import.meta.env.DEV || import.meta.env.VITE_WAITLIST_PREVIEW === '1';
 
 export function App() {
   const [locale, setLocale] = useState('en');
+  const [malaysia, setMalaysia] = useState(false);
   const [index, setIndex] = useState(0);
   const [paused, setPaused] = useState(false);
   const [manual, setManual] = useState(false);
@@ -250,12 +273,24 @@ export function App() {
   const [interacting, setInteracting] = useState(false);
   const [visible, setVisible] = useState(false);
   const [storyStep, setStoryStep] = useState(-1);
+  const [floodPaused, setFloodPaused] = useState(false);
   const [storyError, setStoryError] = useState(false);
   const [email, setEmail] = useState('');
   const [submitState, setSubmitState] = useState('idle');
   const carouselRef = useRef(null);
   const storyAudio = useRef(null);
+  const playingStory = useRef(null);
   const t = content[locale];
+  const story = malaysia ? malaysianStory[locale] : t.story;
+  const activeStory = storyStep >= 0 ? playingStory.current || story : story;
+  useEffect(() => {
+    if (import.meta.env.DEV && new URLSearchParams(location.search).get('previewCountry') === 'MY') {
+      setMalaysia(true);
+      return;
+    }
+    fetch('/api/region').then((response) => response.ok ? response.json() : null)
+      .then((region) => setMalaysia(region?.malaysia === true)).catch(() => {});
+  }, []);
   useEffect(() => {
     document.documentElement.lang = locale;
     document.title = `Wawa — ${t.title}`;
@@ -289,13 +324,15 @@ export function App() {
   }, [paused, reduced, mobile, interacting, visible, t.examples.length]);
   function playStoryStep(next) {
     const audio = storyAudio.current;
-    if (next >= t.story.length) {
+    if (next === 0) playingStory.current = story;
+    const script = playingStory.current;
+    if (next >= script.length) {
       setStoryStep(-1);
       return;
     }
     setStoryError(false);
     setStoryStep(next);
-    audio.src = t.story[next].audio;
+    audio.src = script[next].audio;
     audio.play().catch(() => {
       setStoryError(true);
       setStoryStep(-1);
@@ -386,6 +423,12 @@ export function App() {
                   <span>{t.storyTitle}</span>
                   <span>{t.storyHint}</span>
                 </div>
+                <div className={`message-flood ${storyStep === 3 ? 'is-resolved' : ''} ${floodPaused ? 'is-paused' : ''}`} aria-label={t.floodLabel}>
+                  {t.flood.map((message, i) => (
+                    <span className={`flood-message flood-${i}`} key={i} aria-hidden="true">{message}</span>
+                  ))}
+                </div>
+                {!reduced && <button className="flood-control" type="button" onClick={() => setFloodPaused(!floodPaused)}>{floodPaused ? t.playFlood : t.pauseFlood}</button>}
                 <div className="story-body">
                   <img
                     className={`story-sprite ${storyStep >= 0 ? 'is-speaking' : ''}`}
@@ -393,11 +436,11 @@ export function App() {
                     alt=""
                   />
                   {storyStep < 0 ? (
-                    <p className="story-idle">“{t.story[0].line}”</p>
+                    <p className="story-idle">“{activeStory[0].line}”</p>
                   ) : (
                     <div className="story-scene" aria-live="polite" key={storyStep}>
-                      <span>{t.story[storyStep].who}</span>
-                      <p>“{t.story[storyStep].line}”</p>
+                      <span>{activeStory[storyStep].who}</span>
+                      <p>“{activeStory[storyStep].line}”</p>
                       {storyStep === 3 && <img src="/wawa-overview.png" alt={t.screenshot} />}
                     </div>
                   )}
