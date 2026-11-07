@@ -2,50 +2,36 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import worker from './index.js';
 
-const request = (email, locale = 'en') =>
-  new Request('https://example.test/api/waitlist', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, locale }),
-  });
+const request = (email, locale = 'en') => new Request('https://example.test/api/waitlist', {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, locale }),
+});
 
-test('keeps a signup when the confirmation email cannot be sent', async () => {
-  const saved = [];
-  const env = {
-    WAITLIST: {
-      prepare: () => ({
-        bind: (email, locale) => ({
-          run: async () => {
-            saved.push({ email, locale });
-            return { meta: { changes: 1 } };
-          },
-        }),
-      }),
-    },
-    EMAIL: {
-      send: async () => {
-        throw new Error('unavailable');
-      },
-    },
-  };
-  const response = await worker.fetch(request('person@example.test', 'ms'), env);
-  assert.deepEqual(saved, [{ email: 'person@example.test', locale: 'ms' }]);
+function bucket() {
+  const data = new Map();
+  return { data, async put(key, value, options) {
+    assert.equal(options.onlyIf.get('If-None-Match'), '*');
+    if (data.has(key)) return null;
+    data.set(key, JSON.parse(value));
+    return { key };
+  } };
+}
+
+test('keeps a signup when confirmation is unavailable', async () => {
+  const WAITLIST = bucket();
+  const response = await worker.fetch(request('person@example.test', 'ms'), { WAITLIST });
+  const [saved] = WAITLIST.data.values();
+  assert.equal(saved.email, 'person@example.test');
+  assert.equal(saved.locale, 'ms');
   assert.deepEqual(await response.json(), { status: 'saved', confirmation: 'not_sent' });
 });
 
-test('does not send another confirmation for an existing signup', async () => {
-  let sent = false;
-  const env = {
-    WAITLIST: {
-      prepare: () => ({ bind: () => ({ run: async () => ({ meta: { changes: 0 } }) }) }),
-    },
-    EMAIL: {
-      send: async () => {
-        sent = true;
-      },
-    },
-  };
+test('treats email addresses case insensitively and sends no duplicate confirmation', async () => {
+  const WAITLIST = bucket();
+  let sends = 0;
+  const env = { WAITLIST, EMAIL: { send: async () => { sends++; } } };
+  await worker.fetch(request('Person@example.test'), env);
   const response = await worker.fetch(request('person@example.test'), env);
   assert.deepEqual(await response.json(), { status: 'already' });
-  assert.equal(sent, false);
+  assert.equal(WAITLIST.data.size, 1);
+  assert.equal(sends, 1);
 });

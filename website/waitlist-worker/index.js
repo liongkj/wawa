@@ -29,15 +29,16 @@ export default {
       return reply({ error: 'Invalid email' }, 400);
     let result;
     try {
-      result = await env.WAITLIST.prepare(
-        'INSERT INTO signups (email, locale) VALUES (?, ?) ON CONFLICT(email) DO NOTHING',
-      )
-        .bind(email, locale)
-        .run();
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(email.toLowerCase()));
+      const key = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+      result = await env.WAITLIST.put(key, JSON.stringify({ email, locale, createdAt: new Date().toISOString() }), {
+        onlyIf: new Headers({ 'If-None-Match': '*' }),
+      });
     } catch {
       return reply({ error: 'Unable to save signup' }, 503);
     }
-    if (result.meta.changes === 0) return reply({ status: 'already' });
+    if (!result) return reply({ status: 'already' });
+    if (!env.EMAIL) return reply({ status: 'saved', confirmation: 'not_sent' });
     try {
       await env.EMAIL.send({
         from: 'no-reply@wawa.liongkj.com',

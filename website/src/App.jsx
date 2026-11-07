@@ -113,6 +113,7 @@ const content = {
     join: 'Join the waitlist',
     joining: 'Joining…',
     consent: 'By joining, you agree to receive email updates about managed Wawa.',
+    waitPrivacy: 'We store your email and language in Cloudflare to manage this waitlist. We keep them until you ask us to delete them or they are no longer needed. To leave the list or request deletion, email',
     success: 'You’re on the waitlist. We’ve requested a confirmation email.',
     saved: 'You’re on the waitlist, but we couldn’t send a confirmation email.',
     already: 'You’re already on the waitlist.',
@@ -233,6 +234,7 @@ const content = {
     join: 'Sertai senarai menunggu',
     joining: 'Sedang menghantar…',
     consent: 'Dengan menyertai, anda bersetuju menerima perkembangan Wawa terurus melalui e-mel.',
+    waitPrivacy: 'Kami menyimpan e-mel dan bahasa anda di Cloudflare untuk mengurus senarai ini. Kami menyimpannya sehingga anda meminta pemadaman atau maklumat itu tidak lagi diperlukan. Untuk keluar daripada senarai atau meminta pemadaman, e-mel',
     success: 'Anda sudah menyertai senarai menunggu. E-mel pengesahan telah diminta.',
     saved: 'Anda sudah menyertai senarai menunggu, tetapi e-mel pengesahan tidak dapat dihantar.',
     already: 'Anda sudah berada dalam senarai menunggu.',
@@ -606,6 +608,7 @@ export function App() {
                 </button>
               </div>
               <p className="consent">{t.consent}</p>
+              <p className="consent">{t.waitPrivacy} <a href="mailto:wawa@liongkj.com">wawa@liongkj.com</a>.</p>
               {!['idle', 'loading'].includes(submitState) && (
                 <p role={['invalid', 'failed'].includes(submitState) ? 'alert' : 'status'}>
                   {t[submitState]}
